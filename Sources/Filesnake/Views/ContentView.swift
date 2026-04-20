@@ -1,20 +1,16 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Root window layout
-
 struct ContentView: View {
     @EnvironmentObject var document: ArchiveDocument
     @State private var isDragTargeted = false
 
     var body: some View {
-        // RawSplitView is a bare NSSplitView NSViewRepresentable.
-        // This gives us real NSSplitView cursor rects (resize arrows on dividers)
-        // without any SwiftUI HSplitView wrapper intercepting cursor events.
-        RawSplitView {
+        HSplitView {
             SidebarView()
+                .environmentObject(document)
                 .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
-        } center: {
+
             VStack(spacing: 0) {
                 if document.archiveURL != nil {
                     SearchBarView(text: $document.searchText)
@@ -24,15 +20,20 @@ struct ContentView: View {
                         .background(.bar)
                         .overlay(alignment: .bottom) { Divider() }
                     FolderBreadcrumbBar()
+                        .environmentObject(document)
                 }
                 ArchiveListView()
+                    .environmentObject(document)
             }
             .frame(minWidth: 340, idealWidth: 500)
-        } trailing: {
+
             PreviewPane()
+                .environmentObject(document)
                 .frame(minWidth: 200, idealWidth: 280)
         }
-        .toolbar { ArchiveToolbar() }
+        // Resize cursor on the two dividers via a transparent overlay
+        .background(SplitViewCursorInstaller())
+        .toolbar { ArchiveToolbar().environmentObject(document) }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
             set: { if !$0 { document.lastError = nil } }
@@ -70,54 +71,30 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Raw NSSplitView wrapper (3-pane, vertical dividers, resize cursors)
+// MARK: - Resize cursor installer
+// Walks the view hierarchy once to find the NSSplitView inside HSplitView
+// and calls resetCursorRects / invalidateCursorRects so macOS shows the
+// left-right resize arrow on the dividers.
 
-private struct RawSplitView<Leading: View, Center: View, Trailing: View>: NSViewRepresentable {
-    @ViewBuilder var leading: () -> Leading
-    @ViewBuilder var center: () -> Center
-    @ViewBuilder var trailing: () -> Trailing
-
-    func makeNSView(context: Context) -> NSSplitView {
-        let split = NSSplitView()
-        split.isVertical = true
-        split.dividerStyle = .thin
-        split.autoresizingMask = [.width, .height]
-
-        // Host each SwiftUI pane in its own NSHostingView inside an NSView container
-        let leadingHost  = host(leading(), minWidth: 180)
-        let centerHost   = host(center(),  minWidth: 340)
-        let trailingHost = host(trailing(), minWidth: 200)
-
-        split.addArrangedSubview(leadingHost)
-        split.addArrangedSubview(centerHost)
-        split.addArrangedSubview(trailingHost)
-
-        // Give NSSplitView a chance to lay out before setting initial positions
+private struct SplitViewCursorInstaller: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
         DispatchQueue.main.async {
-            let total = split.bounds.width
-            if total > 0 {
-                split.setPosition(220, ofDividerAt: 0)
-                split.setPosition(total - 280, ofDividerAt: 1)
+            func findSplitView(_ view: NSView) -> NSSplitView? {
+                if let sv = view as? NSSplitView { return sv }
+                for sub in view.subviews {
+                    if let found = findSplitView(sub) { return found }
+                }
+                return nil
+            }
+            if let sv = findSplitView(v.window?.contentView ?? v) {
+                sv.resetCursorRects()
+                sv.window?.invalidateCursorRects(for: sv)
             }
         }
-        return split
+        return v
     }
-
-    func updateNSView(_ splitView: NSSplitView, context: Context) {}
-
-    private func host<V: View>(_ view: V, minWidth: CGFloat) -> NSView {
-        let hosting = NSHostingView(rootView: view)
-        hosting.translatesAutoresizingMaskIntoConstraints = false
-        let container = NSView()
-        container.addSubview(hosting)
-        NSLayoutConstraint.activate([
-            hosting.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            hosting.topAnchor.constraint(equalTo: container.topAnchor),
-            hosting.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-        return container
-    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 // MARK: - Breadcrumb bar
@@ -143,9 +120,7 @@ struct FolderBreadcrumbBar: View {
                     }.labelStyle(.titleAndIcon)
                 }
             }
-            .font(.callout)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .font(.callout).padding(.horizontal, 12).padding(.vertical, 8)
         }
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
@@ -165,8 +140,7 @@ struct DropHighlightOverlay: View {
                 Text("Release to Open Archive").font(.system(size: 17, weight: .semibold)).foregroundStyle(Color.accentColor)
             }
         }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
+        .ignoresSafeArea().allowsHitTesting(false)
     }
 }
 

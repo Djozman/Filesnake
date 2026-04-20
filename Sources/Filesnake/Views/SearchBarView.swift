@@ -21,9 +21,6 @@ struct SearchBarView: NSViewRepresentable {
         field.sendsWholeSearchString = false
         field.delegate = context.coordinator
         context.coordinator.field = field
-        // Claim first responder as soon as the view is created.
-        // DispatchQueue.main.async defers until after the current layout pass,
-        // so the window hierarchy is fully set up before we request focus.
         DispatchQueue.main.async { [weak field] in
             field?.window?.makeFirstResponder(field)
         }
