@@ -66,11 +66,11 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
     let right: R
     @Binding var sidebarVisible: Bool
 
-    static var sidebarMin: CGFloat { 180 }
-    static var sidebarMax: CGFloat { 340 }
-    static var centerMin:  CGFloat { 340 }
-    static var previewMin: CGFloat { 220 }
-    static var previewMax: CGFloat { 600 }
+    static var sidebarMin:     CGFloat { 180 }
+    static var sidebarMax:     CGFloat { 340 }
+    static var centerMin:      CGFloat { 340 }
+    static var previewMin:     CGFloat { 220 }
+    static var previewMax:     CGFloat { 600 }
     static var initialSidebar: CGFloat { 220 }
     static var initialPreview: CGFloat { 300 }
 
@@ -111,7 +111,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         context.coordinator.centerHost?.rootView = center
         context.coordinator.rightHost?.rootView  = right
 
-        let leftView = split.arrangedSubviews[0]
+        let leftView    = split.arrangedSubviews[0]
         let isCollapsed = split.isSubviewCollapsed(leftView)
         if sidebarVisible && isCollapsed {
             split.setPosition(Self.initialSidebar, ofDividerAt: 0)
@@ -123,48 +123,26 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSSplitViewDelegate {
         weak var split: NSSplitView?
-        var leftHost: NSHostingView<L>?
+        var leftHost:   NSHostingView<L>?
         var centerHost: NSHostingView<C>?
-        var rightHost: NSHostingView<R>?
+        var rightHost:  NSHostingView<R>?
 
-        private var draggingRightDivider = false
-        private var centerWidthAtDragStart: CGFloat = 0
-
-        func splitViewWillResizeSubviews(_ notification: Notification) {
-            guard let split = split else { return }
-            if let idx = notification.userInfo?["NSSplitViewDividerIndex"] as? Int, idx == 1 {
-                draggingRightDivider = true
-                centerWidthAtDragStart = split.arrangedSubviews[1].frame.width
-            } else {
-                draggingRightDivider = false
-            }
-        }
-
-        func splitViewDidResizeSubviews(_ notification: Notification) {
-            guard draggingRightDivider, let split = split else { return }
-            let subs          = split.arrangedSubviews
-            let dT            = split.dividerThickness
-            let total         = split.bounds.width
-            let leftCollapsed = split.isSubviewCollapsed(subs[0])
-            let leftW         = leftCollapsed ? 0 : subs[0].frame.width
-            let leftOffset    = leftCollapsed ? 0 : leftW + dT
-            let lockedCenter  = max(Self.centerMin, centerWidthAtDragStart)
-            let newRight      = max(Self.previewMin, min(Self.previewMax,
-                                   total - leftW - (leftCollapsed ? 0 : dT) - lockedCenter - dT))
-            let h = split.bounds.height
-            subs[1].frame = NSRect(x: leftOffset,                y: 0, width: lockedCenter, height: h)
-            subs[2].frame = NSRect(x: leftOffset + lockedCenter + dT, y: 0, width: newRight, height: h)
-        }
+        // MARK: Constraints — NSSplitView calls these during drag; no manual frame overrides needed.
 
         func splitView(_ splitView: NSSplitView,
                        constrainMinCoordinate proposedMin: CGFloat,
                        ofSubviewAt dividerIndex: Int) -> CGFloat {
+            let subs = splitView.arrangedSubviews
+            let dT   = splitView.dividerThickness
             switch dividerIndex {
-            case 0: return Self.sidebarMin
+            case 0:
+                return Self.sidebarMin
             case 1:
-                let leftEdge = splitView.arrangedSubviews[0].frame.maxX + splitView.dividerThickness
+                // Left edge of divider 1 must leave enough room for the center
+                let leftEdge = splitView.isSubviewCollapsed(subs[0]) ? 0 : subs[0].frame.maxX + dT
                 return leftEdge + Self.centerMin
-            default: return proposedMin
+            default:
+                return proposedMin
             }
         }
 
@@ -172,11 +150,17 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
                        constrainMaxCoordinate proposedMax: CGFloat,
                        ofSubviewAt dividerIndex: Int) -> CGFloat {
             switch dividerIndex {
-            case 0: return Self.sidebarMax
-            case 1: return splitView.bounds.width - Self.previewMin
-            default: return proposedMax
+            case 0:
+                return Self.sidebarMax
+            case 1:
+                // Right edge of divider 1 must leave enough room for the preview
+                return splitView.bounds.width - Self.previewMin
+            default:
+                return proposedMax
             }
         }
+
+        // MARK: Window resize — keep panels in bounds
 
         func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
             let subs          = splitView.arrangedSubviews
@@ -191,10 +175,10 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             let leftOffset    = leftCollapsed ? 0 : leftW + dT
             let h             = splitView.bounds.height
             if !leftCollapsed {
-                subs[0].frame = NSRect(x: 0,         y: 0, width: leftW,   height: h)
+                subs[0].frame = NSRect(x: 0, y: 0, width: leftW, height: h)
             }
-            subs[1].frame = NSRect(x: leftOffset,                    y: 0, width: centerW, height: h)
-            subs[2].frame = NSRect(x: leftOffset + centerW + dT,     y: 0, width: rightW,  height: h)
+            subs[1].frame = NSRect(x: leftOffset,             y: 0, width: centerW, height: h)
+            subs[2].frame = NSRect(x: leftOffset + centerW + dT, y: 0, width: rightW,  height: h)
         }
 
         func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
