@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App identity -->
+    <key>CFBundleName</key>
+    <string>Filesnake</string>
+    <key>CFBundleDisplayName</key>
+    <string>Filesnake</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.filesnake.app</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>Filesnake</string>
+
+    <!-- This is the critical key: tells macOS this is a SwiftUI/AppKit app,
+         not a command-line tool. Without it the toolbar, menu bar, first
+         responder and window chrome don’t initialise correctly. -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <!-- Allow the app to appear in the Dock and have a menu bar -->
+    <key>LSUIElement</key>
+    <false/>
+
+    <!-- macOS version requirement -->
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <!-- Permissions -->
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2024 Filesnake. All rights reserved.</string>
+</dict>
+</plist>
