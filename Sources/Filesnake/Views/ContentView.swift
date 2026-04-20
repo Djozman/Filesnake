@@ -70,7 +70,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
     static var sidebarMax: CGFloat { 340 }
     static var centerMin:  CGFloat { 340 }
     static var previewMin: CGFloat { 220 }
-    static var previewMax: CGFloat { 480 }
+    static var previewMax: CGFloat { 600 }
     static var initialSidebar: CGFloat { 220 }
     static var initialPreview: CGFloat { 300 }
 
@@ -142,15 +142,18 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
 
         func splitViewDidResizeSubviews(_ notification: Notification) {
             guard draggingRightDivider, let split = split else { return }
-            let subs    = split.arrangedSubviews
-            let dT      = split.dividerThickness
-            let total   = split.bounds.width
-            let leftW   = subs[0].frame.width
-            let lockedCenter = max(Self.centerMin, centerWidthAtDragStart)
-            let newRight = max(Self.previewMin, min(Self.previewMax, total - leftW - lockedCenter - 2 * dT))
+            let subs          = split.arrangedSubviews
+            let dT            = split.dividerThickness
+            let total         = split.bounds.width
+            let leftCollapsed = split.isSubviewCollapsed(subs[0])
+            let leftW         = leftCollapsed ? 0 : subs[0].frame.width
+            let leftOffset    = leftCollapsed ? 0 : leftW + dT
+            let lockedCenter  = max(Self.centerMin, centerWidthAtDragStart)
+            let newRight      = max(Self.previewMin, min(Self.previewMax,
+                                   total - leftW - (leftCollapsed ? 0 : dT) - lockedCenter - dT))
             let h = split.bounds.height
-            subs[1].frame = NSRect(x: leftW + dT,                     y: 0, width: lockedCenter, height: h)
-            subs[2].frame = NSRect(x: leftW + dT + lockedCenter + dT, y: 0, width: newRight,     height: h)
+            subs[1].frame = NSRect(x: leftOffset,                y: 0, width: lockedCenter, height: h)
+            subs[2].frame = NSRect(x: leftOffset + lockedCenter + dT, y: 0, width: newRight, height: h)
         }
 
         func splitView(_ splitView: NSSplitView,
@@ -176,17 +179,22 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         }
 
         func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
-            let subs = splitView.arrangedSubviews
+            let subs          = splitView.arrangedSubviews
             guard subs.count == 3 else { splitView.adjustSubviews(); return }
-            let total   = splitView.bounds.width
-            let dT      = splitView.dividerThickness
-            let leftW   = max(Self.sidebarMin, min(Self.sidebarMax, subs[0].frame.width))
-            let rightW  = max(Self.previewMin, min(Self.previewMax, subs[2].frame.width))
-            let centerW = max(Self.centerMin, total - leftW - rightW - 2 * dT)
-            let h = splitView.bounds.height
-            subs[0].frame = NSRect(x: 0,                       y: 0, width: leftW,   height: h)
-            subs[1].frame = NSRect(x: leftW + dT,              y: 0, width: centerW, height: h)
-            subs[2].frame = NSRect(x: leftW + centerW + 2*dT,  y: 0, width: rightW,  height: h)
+            let total         = splitView.bounds.width
+            let dT            = splitView.dividerThickness
+            let leftCollapsed = splitView.isSubviewCollapsed(subs[0])
+            let leftW         = leftCollapsed ? 0 : max(Self.sidebarMin, min(Self.sidebarMax, subs[0].frame.width))
+            let rightW        = max(Self.previewMin, min(Self.previewMax, subs[2].frame.width))
+            let dividers      = leftCollapsed ? dT : 2 * dT
+            let centerW       = max(Self.centerMin, total - leftW - rightW - dividers)
+            let leftOffset    = leftCollapsed ? 0 : leftW + dT
+            let h             = splitView.bounds.height
+            if !leftCollapsed {
+                subs[0].frame = NSRect(x: 0,         y: 0, width: leftW,   height: h)
+            }
+            subs[1].frame = NSRect(x: leftOffset,                    y: 0, width: centerW, height: h)
+            subs[2].frame = NSRect(x: leftOffset + centerW + dT,     y: 0, width: rightW,  height: h)
         }
 
         func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
@@ -197,7 +205,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         private static var sidebarMax: CGFloat { 340 }
         private static var centerMin:  CGFloat { 340 }
         private static var previewMin: CGFloat { 220 }
-        private static var previewMax: CGFloat { 480 }
+        private static var previewMax: CGFloat { 600 }
     }
 }
 
@@ -247,7 +255,7 @@ struct DropHighlightOverlay: View {
     }
 }
 
-// MARK: - Status bar (real row, not overlay; won't crop preview scrollbars)
+// MARK: - Status bar
 
 struct StatusBar: View {
     let text: String
