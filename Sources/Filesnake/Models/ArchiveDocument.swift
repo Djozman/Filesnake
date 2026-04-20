@@ -231,7 +231,6 @@ final class ArchiveDocument: ObservableObject {
 
     private func sortEntries(_ list: [ArchiveEntry]) -> [ArchiveEntry] {
         list.sorted { a, b in
-            // Directories always first
             if a.isDirectory != b.isDirectory { return a.isDirectory && !b.isDirectory }
             let asc = sortAscending
             switch sortKey {
@@ -254,22 +253,30 @@ final class ArchiveDocument: ObservableObject {
         path.hasSuffix("/") ? path : path + "/"
     }
 
-    private func runBusy<T>(
-        _ work: @escaping () throws -> T,
-        thenOnMain apply: @escaping (T) -> Void
+    // MARK: - runBusy (Swift 6 safe)
+    //
+    // Capture `self` as a local `ObjectIdentifier`-keyed weak ref so the
+    // Task.detached closure only holds a Sendable `ID` value, not `var self`.
+
+    private func runBusy<T: Sendable>(
+        _ work: @escaping @Sendable () throws -> T,
+        thenOnMain apply: @escaping @MainActor (T) -> Void
     ) {
         isBusy = true
-        Task.detached { [weak self] in
+        // Capture a weak actor reference safely via a Sendable box.
+        let box = WeakBox(self)
+        Task.detached {
             do {
                 let result = try work()
                 await MainActor.run {
                     apply(result)
-                    self?.isBusy = false
+                    box.value?.isBusy = false
                 }
             } catch {
+                let msg = error.localizedDescription
                 await MainActor.run {
-                    self?.lastError = error.localizedDescription
-                    self?.isBusy = false
+                    box.value?.lastError = msg
+                    box.value?.isBusy = false
                 }
             }
         }
@@ -284,4 +291,11 @@ final class ArchiveDocument: ObservableObject {
         if let dir { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
         return dir
     }
+}
+
+// MARK: - Sendable weak-reference box
+
+private final class WeakBox<T: AnyObject>: @unchecked Sendable {
+    weak var value: T?
+    init(_ value: T) { self.value = value }
 }

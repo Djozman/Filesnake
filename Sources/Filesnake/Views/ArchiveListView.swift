@@ -33,16 +33,13 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         table.menu = NSMenu()
         table.menu?.delegate = context.coordinator
 
-        // Header click — sort
-        table.tableColumns.forEach { $0.headerCell.isBordered = false }
-
         let checkCol = NSTableColumn(identifier: .init("check"))
         checkCol.title = ""; checkCol.width = 28; checkCol.minWidth = 28; checkCol.maxWidth = 28
         checkCol.isEditable = false
         table.addTableColumn(checkCol)
 
         let nameCol = NSTableColumn(identifier: .init("name"))
-        nameCol.title = "Name "; nameCol.minWidth = 120; nameCol.isEditable = false
+        nameCol.title = "Name"; nameCol.minWidth = 120; nameCol.isEditable = false
         table.addTableColumn(nameCol)
 
         let sizeCol = NSTableColumn(identifier: .init("size"))
@@ -60,11 +57,7 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         modCol.isEditable = false
         table.addTableColumn(modCol)
 
-        // Column header sort indicators
-        table.sortDescriptors = []
-
         context.coordinator.table = table
-        context.coordinator.headerView = table.headerView
 
         let scroll = NSScrollView()
         scroll.documentView = table
@@ -72,8 +65,6 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
-
-        // Register for drag-and-drop file acceptance
         scroll.registerForDraggedTypes([.fileURL])
 
         context.coordinator.scrollView = scroll
@@ -101,22 +92,23 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         }
     }
 
-    private func updateSortIndicators(table: NSTableView, key: ArchiveDocument.SortKey, ascending: Bool) {
-        let colID: String
+    private func updateSortIndicators(
+        table: NSTableView,
+        key: ArchiveDocument.SortKey,
+        ascending: Bool
+    ) {
+        let activeID: String
         switch key {
-        case .name:       colID = "name"
-        case .size:       colID = "size"
-        case .compressed: colID = "compressed"
-        case .modified:   colID = "modified"
+        case .name:       activeID = "name"
+        case .size:       activeID = "size"
+        case .compressed: activeID = "compressed"
+        case .modified:   activeID = "modified"
         }
+        let upArrow   = NSImage(systemSymbolName: "chevron.up",   accessibilityDescription: nil)
+        let downArrow = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
         for col in table.tableColumns {
-            if col.identifier.rawValue == colID {
-                table.setIndicatorImage(
-                    NSImage(named: ascending ? NSImage.menuMixedStateName : NSImage.removeTemplateName)
-                        ?? (ascending ? NSImage(systemSymbolName: "chevron.up", accessibilityDescription: nil)!
-                                      : NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)!),
-                    in: col
-                )
+            if col.identifier.rawValue == activeID {
+                table.setIndicatorImage(ascending ? upArrow : downArrow, in: col)
                 table.highlightedTableColumn = col
             } else {
                 table.setIndicatorImage(nil, in: col)
@@ -125,7 +117,7 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
     }
 }
 
-// MARK: - Custom NSTableView (clean mouseDown + drag-drop)
+// MARK: - Custom NSTableView
 
 final class FilesnakeTableView: NSTableView {
     override func mouseDown(with event: NSEvent) {
@@ -150,9 +142,8 @@ final class Coordinator: NSObject,
     var sortAscending: Bool = true
     weak var table: FilesnakeTableView?
     weak var scrollView: NSScrollView?
-    weak var headerView: NSTableHeaderView?
 
-    // MARK: - DataSource
+    // MARK: DataSource
 
     func numberOfRows(in tableView: NSTableView) -> Int { entries.count }
 
@@ -199,7 +190,7 @@ final class Coordinator: NSObject,
         }
     }
 
-    // MARK: - Column header sort
+    // MARK: Column header sort
 
     func tableView(_ tableView: NSTableView, mouseDownInHeaderOf tableColumn: NSTableColumn) {
         let key: ArchiveDocument.SortKey
@@ -213,7 +204,7 @@ final class Coordinator: NSObject,
         document?.toggleSort(key: key)
     }
 
-    // MARK: - Selection
+    // MARK: Selection
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard let table = notification.object as? NSTableView else { return }
@@ -221,7 +212,7 @@ final class Coordinator: NSObject,
         document?.focused = (idx >= 0 && idx < entries.count) ? entries[idx].id : nil
     }
 
-    // MARK: - Row actions
+    // MARK: Row actions
 
     @objc func rowDoubleClicked(_ sender: NSTableView) {
         let row = sender.clickedRow
@@ -236,7 +227,7 @@ final class Coordinator: NSObject,
         document?.toggleChecked(entries[row].id)
     }
 
-    // MARK: - Right-click menu
+    // MARK: Right-click menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
@@ -282,29 +273,41 @@ final class Coordinator: NSObject,
             menu.addItem(.separator())
         }
 
-        let extractCheckedItem = NSMenuItem(title: "Extract Checked\u{2026}",
-            action: doc.checked.isEmpty ? nil : #selector(menuExtractChecked(_:)), keyEquivalent: "")
+        let extractCheckedItem = NSMenuItem(
+            title: "Extract Checked\u{2026}",
+            action: doc.checked.isEmpty ? nil : #selector(menuExtractChecked(_:)),
+            keyEquivalent: ""
+        )
         extractCheckedItem.target = self; extractCheckedItem.isEnabled = !doc.checked.isEmpty
         menu.addItem(extractCheckedItem)
 
         let hasFiles = targetEntries.contains { !$0.isDirectory }
 
-        let extractSelItem = NSMenuItem(title: "Extract Selection\u{2026}",
-            action: hasFiles ? #selector(menuExtractSelection(_:)) : nil, keyEquivalent: "")
+        let extractSelItem = NSMenuItem(
+            title: "Extract Selection\u{2026}",
+            action: hasFiles ? #selector(menuExtractSelection(_:)) : nil,
+            keyEquivalent: ""
+        )
         extractSelItem.representedObject = targetIDs as NSArray
         extractSelItem.target = self; extractSelItem.isEnabled = hasFiles
         menu.addItem(extractSelItem)
 
-        let extractHereItem = NSMenuItem(title: "Extract Selection Here",
-            action: hasFiles ? #selector(menuExtractHere(_:)) : nil, keyEquivalent: "")
+        let extractHereItem = NSMenuItem(
+            title: "Extract Selection Here",
+            action: hasFiles ? #selector(menuExtractHere(_:)) : nil,
+            keyEquivalent: ""
+        )
         extractHereItem.representedObject = targetIDs as NSArray
         extractHereItem.target = self; extractHereItem.isEnabled = hasFiles
         menu.addItem(extractHereItem)
 
         if doc.format?.supportsDeletion == true {
             menu.addItem(.separator())
-            let deleteItem = NSMenuItem(title: "Delete Checked from Archive",
-                action: doc.checked.isEmpty ? nil : #selector(menuDeleteChecked(_:)), keyEquivalent: "")
+            let deleteItem = NSMenuItem(
+                title: "Delete Checked from Archive",
+                action: doc.checked.isEmpty ? nil : #selector(menuDeleteChecked(_:)),
+                keyEquivalent: ""
+            )
             deleteItem.target = self; deleteItem.isEnabled = !doc.checked.isEmpty
             deleteItem.attributedTitle = NSAttributedString(
                 string: "Delete Checked from Archive",
@@ -364,26 +367,20 @@ final class Coordinator: NSObject,
     }
     @objc func menuDeleteChecked(_ sender: NSMenuItem) { document?.deleteSelection() }
 
-    // MARK: - Drag-and-drop destination (open dragged archives)
+    // MARK: Drag-and-drop destination
 
     func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
-              urls.contains(where: { ArchiveFormat.detect(url: $0) != nil })
-        else { return [] }
+        guard isArchiveDrag(sender) else { return [] }
         showDropIndicator(true)
         return .copy
     }
 
     func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
-              urls.contains(where: { ArchiveFormat.detect(url: $0) != nil })
-        else { showDropIndicator(false); return [] }
+        guard isArchiveDrag(sender) else { showDropIndicator(false); return [] }
         return .copy
     }
 
-    func draggingExited(_ sender: NSDraggingInfo?) {
-        showDropIndicator(false)
-    }
+    func draggingExited(_ sender: NSDraggingInfo?) { showDropIndicator(false) }
 
     func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         showDropIndicator(false)
@@ -394,11 +391,14 @@ final class Coordinator: NSObject,
         return true
     }
 
-    func concludeDragOperation(_ sender: NSDraggingInfo?) {
-        showDropIndicator(false)
+    func concludeDragOperation(_ sender: NSDraggingInfo?) { showDropIndicator(false) }
+
+    private func isArchiveDrag(_ info: NSDraggingInfo) -> Bool {
+        guard let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] else { return false }
+        return urls.contains { ArchiveFormat.detect(url: $0) != nil }
     }
 
-    // MARK: - Drop indicator overlay
+    // MARK: Drop overlay
 
     private var dropOverlay: DropOverlayView?
 
@@ -417,7 +417,7 @@ final class Coordinator: NSObject,
         }
     }
 
-    // MARK: - Cell builders
+    // MARK: Cell builders
 
     private func makeNameCell() -> NSTableCellView {
         let cell = NSTableCellView()
@@ -478,7 +478,5 @@ final class DropOverlayView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override func draw(_ dirtyRect: NSRect) {
-        // Background drawn by layer
-    }
+    override func draw(_ dirtyRect: NSRect) { /* layer handles background */ }
 }
