@@ -24,7 +24,6 @@ final class FilesnakeTableView: NSTableView {
     override func becomeFirstResponder() -> Bool { false }
 
     override func mouseDown(with event: NSEvent) {
-        // Don't steal focus; just handle selection
         super.mouseDown(with: event)
     }
 }
@@ -43,7 +42,7 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         table.allowsEmptySelection = true
         table.allowsColumnSelection = false
         table.allowsColumnReordering = false
-        table.style = .inset
+        table.style = .fullWidth
         table.rowHeight = 22
         table.delegate = context.coordinator
         table.dataSource = context.coordinator
