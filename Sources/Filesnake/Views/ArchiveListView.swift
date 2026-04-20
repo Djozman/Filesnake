@@ -17,9 +17,21 @@ struct ArchiveListView: View {
                     Image(nsImage: FileIcon.icon(for: entry))
                         .resizable()
                         .frame(width: 16, height: 16)
-                    Text(entry.path)
+                    Text(entry.name)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    if entry.isDirectory {
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    if entry.isDirectory {
+                        document.enterFolder(entry)
+                    }
                 }
             }
             TableColumn("Size") { entry in
@@ -46,6 +58,12 @@ struct ArchiveListView: View {
             Button("Check") { ids.forEach { document.checked.insert($0) } }
             Button("Uncheck") { ids.forEach { document.checked.remove($0) } }
             Divider()
+            if ids.count == 1,
+               let id = ids.first,
+               let folder = document.filteredEntries.first(where: { $0.id == id && $0.isDirectory }) {
+                Button("Open Folder") { document.enterFolder(folder) }
+                Divider()
+            }
             Button("Extract Checked…") { document.extractSelection() }
                 .disabled(document.checked.isEmpty)
             if document.format?.supportsDeletion == true {

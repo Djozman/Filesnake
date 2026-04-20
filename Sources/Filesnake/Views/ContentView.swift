@@ -8,8 +8,13 @@ struct ContentView: View {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } content: {
-            ArchiveListView()
-                .navigationSplitViewColumnWidth(min: 360, ideal: 520)
+            VStack(spacing: 0) {
+                if document.archiveURL != nil {
+                    FolderBreadcrumbBar()
+                }
+                ArchiveListView()
+            }
+            .navigationSplitViewColumnWidth(min: 360, ideal: 520)
         } detail: {
             PreviewPane()
         }
@@ -41,6 +46,50 @@ struct ContentView: View {
         let (count, size) = document.stats
         let fmt = document.format?.displayName ?? ""
         return "\(fmt) · \(count) files · \(Formatters.bytes(size))"
+    }
+}
+
+private struct FolderBreadcrumbBar: View {
+    @EnvironmentObject var document: ArchiveDocument
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                Button("Root") {
+                    document.goToRoot()
+                }
+                .buttonStyle(.link)
+                .disabled(document.currentFolderPath.isEmpty)
+
+                ForEach(Array(document.breadcrumbs.enumerated()), id: \.offset) { index, crumb in
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Button(crumb) {
+                        document.goToBreadcrumb(index: index)
+                    }
+                    .buttonStyle(.link)
+                    .disabled(index == document.breadcrumbs.count - 1)
+                }
+
+                if !document.currentFolderPath.isEmpty {
+                    Spacer(minLength: 12)
+                    Button {
+                        document.goBack()
+                    } label: {
+                        Label("Up", systemImage: "arrow.uturn.backward")
+                    }
+                    .labelStyle(.titleAndIcon)
+                }
+            }
+            .font(.callout)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
     }
 }
 

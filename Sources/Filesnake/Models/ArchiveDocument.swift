@@ -12,14 +12,36 @@ final class ArchiveDocument: ObservableObject {
     @Published var searchText: String = ""
     @Published private(set) var isBusy: Bool = false
     @Published var lastError: String?
+    @Published private(set) var currentFolderPath: String = ""
 
     private var handler: ArchiveHandler?
     private var previewCacheDir: URL?
 
+    var visibleEntries: [ArchiveEntry] {
+        let prefix = currentFolderPath
+        return entries.filter { entry in
+            if prefix.isEmpty {
+                return !entry.path.isEmpty && !entry.parentPath.isEmpty ? entry.parentPath.isEmpty : !entry.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).contains("/")
+            }
+
+            guard entry.path.hasPrefix(prefix) else { return false }
+            let remainder = String(entry.path.dropFirst(prefix.count))
+            guard !remainder.isEmpty else { return false }
+            let trimmed = remainder.hasSuffix("/") ? String(remainder.dropLast()) : remainder
+            return !trimmed.contains("/")
+        }
+        .sorted {
+            if $0.isDirectory != $1.isDirectory { return $0.isDirectory && !$1.isDirectory }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
     var filteredEntries: [ArchiveEntry] {
-        guard !searchText.isEmpty else { return entries }
+        guard !searchText.isEmpty else { return visibleEntries }
         let q = searchText.lowercased()
-        return entries.filter { $0.path.lowercased().contains(q) }
+        return visibleEntries.filter {
+            $0.name.lowercased().contains(q) || $0.path.lowercased().contains(q)
+        }
     }
 
     var checkedEntries: [ArchiveEntry] {
@@ -29,6 +51,12 @@ final class ArchiveDocument: ObservableObject {
     var currentEntry: ArchiveEntry? {
         guard let id = focused else { return nil }
         return entries.first { $0.id == id }
+    }
+
+    var breadcrumbs: [String] {
+        guard !currentFolderPath.isEmpty else { return [] }
+        let trimmed = currentFolderPath.hasSuffix("/") ? String(currentFolderPath.dropLast()) : currentFolderPath
+        return trimmed.split(separator: "/").map(String.init)
     }
 
     func toggleChecked(_ id: ArchiveEntry.ID) {
@@ -41,6 +69,37 @@ final class ArchiveDocument: ObservableObject {
 
     func uncheckAll() {
         checked.removeAll()
+    }
+
+    func enterFolder(_ entry: ArchiveEntry) {
+        guard entry.isDirectory else { return }
+        currentFolderPath = normalizedDirectoryPath(for: entry.path)
+        focused = nil
+    }
+
+    func goBack() {
+        guard !currentFolderPath.isEmpty else { return }
+        let trimmed = currentFolderPath.hasSuffix("/") ? String(currentFolderPath.dropLast()) : currentFolderPath
+        let ns = trimmed as NSString
+        let parent = ns.deletingLastPathComponent
+        currentFolderPath = parent.isEmpty ? "" : parent + "/"
+        focused = nil
+    }
+
+    func goToRoot() {
+        currentFolderPath = ""
+        focused = nil
+    }
+
+    func goToBreadcrumb(index: Int) {
+        guard index >= 0 else {
+            goToRoot()
+            return
+        }
+        let parts = breadcrumbs
+        guard index < parts.count else { return }
+        currentFolderPath = parts.prefix(index + 1).joined(separator: "/") + "/"
+        focused = nil
     }
 
     var stats: (count: Int, totalSize: UInt64) {
@@ -63,6 +122,7 @@ final class ArchiveDocument: ObservableObject {
             self.checked = []
             self.focused = nil
             self.searchText = ""
+            self.currentFolderPath = ""
             self.previewCacheDir = makePreviewCacheDir(for: url)
         } catch {
             lastError = error.localizedDescription
@@ -77,6 +137,7 @@ final class ArchiveDocument: ObservableObject {
         checked = []
         focused = nil
         searchText = ""
+        currentFolderPath = ""
         if let dir = previewCacheDir {
             try? FileManager.default.removeItem(at: dir)
         }
@@ -155,6 +216,10 @@ final class ArchiveDocument: ObservableObject {
             lastError = error.localizedDescription
             return nil
         }
+    }
+
+    private func normalizedDirectoryPath(for path: String) -> String {
+        path.hasSuffix("/") ? path : path + "/"
     }
 
     private func runBusy<T>(
