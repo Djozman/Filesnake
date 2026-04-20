@@ -11,14 +11,22 @@ struct ContentView: View {
                 .environmentObject(document)
                 .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
 
-            VStack(spacing: 0) {
-                if document.archiveURL != nil {
-                    FolderBreadcrumbBar()
+            // NavigationStack is required for .searchable to work.
+            // It adds no visible navigation UI here — just provides the
+            // hosting context the modifier needs.
+            NavigationStack {
+                VStack(spacing: 0) {
+                    if document.archiveURL != nil {
+                        FolderBreadcrumbBar()
+                            .environmentObject(document)
+                    }
+                    ArchiveListView()
                         .environmentObject(document)
                 }
-                ArchiveListView()
-                    .environmentObject(document)
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
             }
+            .searchable(text: $document.searchText, placement: .toolbar, prompt: "Search files\u{2026}")
             .frame(minWidth: 340, idealWidth: 500)
 
             PreviewPane()
@@ -26,8 +34,6 @@ struct ContentView: View {
                 .frame(minWidth: 200, idealWidth: 280)
         }
         .background(DividerCursorTracker())
-        // Native macOS search bar — appears in toolbar, no custom NSViewRepresentable needed
-        .searchable(text: $document.searchText, placement: .toolbar, prompt: "Search files\u{2026}")
         .toolbar { ArchiveToolbar() }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
