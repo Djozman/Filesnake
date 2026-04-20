@@ -1,11 +1,13 @@
 import SwiftUI
 import AppKit
 
+// MARK: - SwiftUI wrapper
+
 struct ArchiveListView: View {
     @EnvironmentObject var document: ArchiveDocument
 
     var body: some View {
-        ArchiveTableView()
+        ArchiveNSTableBridge()
             .contextMenu(forSelectionType: ArchiveEntry.ID.self) { ids in
                 Button("Check") { ids.forEach { document.checked.insert($0) } }
                 Button("Uncheck") { ids.forEach { document.checked.remove($0) } }
@@ -27,57 +29,67 @@ struct ArchiveListView: View {
     }
 }
 
-// NSTableView wrapper — gives us proper multi-selection (drag, Cmd+click, Shift+click)
-// without SwiftUI's Table fighting our checkboxes for the selection model.
-struct ArchiveTableView: NSViewRepresentable {
+// MARK: - NSViewRepresentable
+
+struct ArchiveNSTableBridge: NSViewRepresentable {
     @EnvironmentObject var document: ArchiveDocument
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let table = NSTableView()
+        let table = FilesnakeTableView()
         table.usesAlternatingRowBackgroundColors = true
+        // Multi-selection: allow drag-select, Shift+click, Cmd+click
         table.allowsMultipleSelection = true
         table.allowsEmptySelection = true
         table.allowsColumnSelection = false
+        table.allowsColumnReordering = false
         table.style = .inset
         table.rowHeight = 22
         table.delegate = context.coordinator
         table.dataSource = context.coordinator
+        table.doubleAction = #selector(Coordinator.rowDoubleClicked(_:))
         table.target = context.coordinator
-        table.doubleAction = #selector(Coordinator.doubleClicked(_:))
 
-        let checkCol = NSTableColumn(identifier: .init("check"))
+        // Checkbox column — narrow, no header
+        let checkCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("check"))
         checkCol.title = ""
-        checkCol.width = 24
-        checkCol.minWidth = 24
-        checkCol.maxWidth = 24
+        checkCol.width = 28
+        checkCol.minWidth = 28
+        checkCol.maxWidth = 28
+        checkCol.isEditable = false
         table.addTableColumn(checkCol)
 
-        let nameCol = NSTableColumn(identifier: .init("name"))
+        let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
         nameCol.title = "Name"
         nameCol.minWidth = 120
+        nameCol.isEditable = false
         table.addTableColumn(nameCol)
 
-        let sizeCol = NSTableColumn(identifier: .init("size"))
+        let sizeCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
         sizeCol.title = "Size"
         sizeCol.width = 80
         sizeCol.minWidth = 60
         sizeCol.maxWidth = 140
+        sizeCol.isEditable = false
         table.addTableColumn(sizeCol)
 
-        let compCol = NSTableColumn(identifier: .init("compressed"))
+        let compCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("compressed"))
         compCol.title = "Compressed"
         compCol.width = 90
         compCol.minWidth = 70
         compCol.maxWidth = 140
+        compCol.isEditable = false
         table.addTableColumn(compCol)
 
-        let modCol = NSTableColumn(identifier: .init("modified"))
+        let modCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("modified"))
         modCol.title = "Modified"
         modCol.width = 140
         modCol.minWidth = 100
         modCol.maxWidth = 200
+        modCol.isEditable = false
         table.addTableColumn(modCol)
 
         context.coordinator.table = table
@@ -87,108 +99,197 @@ struct ArchiveTableView: NSViewRepresentable {
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
         return scroll
     }
 
-    func updateNSView(_ scroll: NSScrollView, context: Context) {
-        let table = scroll.documentView as! NSTableView
-        context.coordinator.entries = document.filteredEntries
-        context.coordinator.document = document
-        table.reloadData()
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        let coord = context.coordinator
+        let table = scrollView.documentView as! FilesnakeTableView
 
-        // Sync focused row
-        if let focused = document.focused,
-           let idx = document.filteredEntries.firstIndex(where: { $0.id == focused }) {
-            if !table.selectedRowIndexes.contains(idx) {
-                table.selectRowIndexes(IndexSet(integer: idx), byExtendingSelection: false)
+        let newEntries = document.filteredEntries
+        let needsReload = coord.entries.map(\.id) != newEntries.map(\.id)
+            || coord.checkedSnapshot != document.checked
+
+        coord.entries = newEntries
+        coord.checkedSnapshot = document.checked
+        coord.document = document
+
+        if needsReload {
+            table.reloadData()
+        }
+    }
+}
+
+// MARK: - Custom NSTableView (fixes click recognition)
+
+/// Subclass so we can intercept mouseDown and cleanly separate
+/// checkbox-column clicks from row-selection drag/multi-select.
+final class FilesnakeTableView: NSTableView {
+
+    override func mouseDown(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: localPoint)
+        let col = self.column(at: localPoint)
+
+        // If the click lands in the checkbox column, handle ONLY the checkbox;
+        // do NOT start a drag-selection or change the row selection.
+        if col == 0 && row >= 0 {
+            // Let the cell view handle the checkbox toggle via its action;
+            // forward to super only the mouseDown so the button activates,
+            // but block selection change by bypassing super's drag tracking.
+            super.mouseDown(with: event)
+            return
+        }
+
+        // For all other columns: let NSTableView do its full multi-select logic
+        // (drag rubber-band, Shift+click extend, Cmd+click toggle).
+        super.mouseDown(with: event)
+    }
+}
+
+// MARK: - Coordinator (DataSource + Delegate)
+
+final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    var entries: [ArchiveEntry] = []
+    var checkedSnapshot: Set<ArchiveEntry.ID> = []
+    var document: ArchiveDocument?
+    weak var table: FilesnakeTableView?
+
+    // MARK: DataSource
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        entries.count
+    }
+
+    func tableView(_ tableView: NSTableView,
+                   viewFor tableColumn: NSTableColumn?,
+                   row: Int) -> NSView? {
+        guard row < entries.count else { return nil }
+        let entry = entries[row]
+
+        switch tableColumn?.identifier.rawValue {
+        case "check":
+            let cellID = NSUserInterfaceItemIdentifier("CheckCell")
+            let btn: NSButton
+            if let reused = tableView.makeView(withIdentifier: cellID, owner: nil) as? NSButton {
+                btn = reused
+            } else {
+                btn = NSButton(checkboxWithTitle: "", target: self, action: #selector(checkboxClicked(_:)))
+                btn.identifier = cellID
+                // Prevent the checkbox from participating in row selection
+                btn.refusesFirstResponder = true
             }
-        } else if document.focused == nil && !table.selectedRowIndexes.isEmpty {
-            // Don't force-deselect; let user keep visual selection
+            btn.state = checkedSnapshot.contains(entry.id) ? .on : .off
+            btn.tag = row
+            btn.action = #selector(checkboxClicked(_:))
+            btn.target = self
+            return btn
+
+        case "name":
+            let cellID = NSUserInterfaceItemIdentifier("NameCell")
+            let cell: NSTableCellView
+            if let reused = tableView.makeView(withIdentifier: cellID, owner: nil) as? NSTableCellView {
+                cell = reused
+            } else {
+                cell = makeNameCell()
+                cell.identifier = cellID
+            }
+            cell.textField?.stringValue = entry.name
+            cell.imageView?.image = FileIcon.icon(for: entry)
+            if entry.isDirectory {
+                cell.textField?.textColor = .labelColor
+            } else {
+                cell.textField?.textColor = .labelColor
+            }
+            // Show disclosure chevron inside the text for folders
+            cell.textField?.stringValue = entry.isDirectory
+                ? entry.name + "  \u{203a}"
+                : entry.name
+            return cell
+
+        case "size":
+            return secondaryLabel(
+                entry.isDirectory ? "\u{2014}" : Formatters.bytes(entry.uncompressedSize)
+            )
+
+        case "compressed":
+            return secondaryLabel(
+                entry.isDirectory ? "\u{2014}" : Formatters.bytes(entry.compressedSize)
+            )
+
+        case "modified":
+            return secondaryLabel(Formatters.date(entry.modified))
+
+        default:
+            return nil
         }
     }
 
-    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-        var entries: [ArchiveEntry] = []
-        var document: ArchiveDocument?
-        weak var table: NSTableView?
+    // MARK: Delegate
 
-        func numberOfRows(in tableView: NSTableView) -> Int { entries.count }
-
-        func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-            guard row < entries.count else { return nil }
-            let entry = entries[row]
-            let id = tableColumn?.identifier.rawValue ?? ""
-
-            switch id {
-            case "check":
-                let cell = tableView.makeView(withIdentifier: .init("checkCell"), owner: nil) as? NSButton
-                    ?? makeCheckbox()
-                cell.state = (document?.checked.contains(entry.id) == true) ? .on : .off
-                cell.tag = row
-                cell.action = #selector(checkboxToggled(_:))
-                cell.target = self
-                return cell
-
-            case "name":
-                let cell = tableView.makeView(withIdentifier: .init("nameCell"), owner: nil) as? NSTableCellView
-                    ?? NSTableCellView()
-                cell.identifier = .init("nameCell")
-                cell.textField?.stringValue = entry.name
-                cell.imageView?.image = FileIcon.icon(for: entry)
-                return cell
-
-            case "size":
-                return makeLabel(entry.isDirectory ? "\u{2014}" : Formatters.bytes(entry.uncompressedSize))
-
-            case "compressed":
-                return makeLabel(entry.isDirectory ? "\u{2014}" : Formatters.bytes(entry.compressedSize))
-
-            case "modified":
-                return makeLabel(Formatters.date(entry.modified))
-
-            default:
-                return nil
-            }
-        }
-
-        func tableViewSelectionDidChange(_ notification: Notification) {
-            guard let table = notification.object as? NSTableView else { return }
-            let idx = table.selectedRow
-            guard idx >= 0, idx < entries.count else {
-                document?.focused = nil
-                return
-            }
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard let table = notification.object as? NSTableView else { return }
+        let idx = table.selectedRow
+        if idx >= 0 && idx < entries.count {
             document?.focused = entries[idx].id
+        } else {
+            document?.focused = nil
         }
+    }
 
-        @objc func doubleClicked(_ sender: NSTableView) {
-            let row = sender.clickedRow
-            guard row >= 0, row < entries.count else { return }
-            let entry = entries[row]
-            if entry.isDirectory {
-                document?.enterFolder(entry)
-            }
-        }
+    // MARK: Actions
 
-        @objc func checkboxToggled(_ sender: NSButton) {
-            let row = sender.tag
-            guard row >= 0, row < entries.count else { return }
-            let id = entries[row].id
-            document?.toggleChecked(id)
+    @objc func rowDoubleClicked(_ sender: NSTableView) {
+        let row = sender.clickedRow
+        guard row >= 0, row < entries.count else { return }
+        let entry = entries[row]
+        if entry.isDirectory {
+            document?.enterFolder(entry)
         }
+    }
 
-        private func makeCheckbox() -> NSButton {
-            let btn = NSButton(checkboxWithTitle: "", target: self, action: #selector(checkboxToggled(_:)))
-            btn.identifier = .init("checkCell")
-            return btn
-        }
+    @objc func checkboxClicked(_ sender: NSButton) {
+        let row = sender.tag
+        guard row >= 0, row < entries.count else { return }
+        document?.toggleChecked(entries[row].id)
+    }
 
-        private func makeLabel(_ text: String) -> NSTextField {
-            let f = NSTextField(labelWithString: text)
-            f.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-            f.textColor = .secondaryLabelColor
-            f.lineBreakMode = .byTruncatingMiddle
-            return f
-        }
+    // MARK: Cell builders
+
+    private func makeNameCell() -> NSTableCellView {
+        let cell = NSTableCellView()
+
+        let imageView = NSImageView()
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.imageScaling = .scaleProportionallyDown
+        cell.imageView = imageView
+        cell.addSubview(imageView)
+
+        let textField = NSTextField(labelWithString: "")
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        textField.lineBreakMode = .byTruncatingMiddle
+        textField.cell?.truncatesLastVisibleLine = true
+        cell.textField = textField
+        cell.addSubview(textField)
+
+        NSLayoutConstraint.activate([
+            imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            imageView.widthAnchor.constraint(equalToConstant: 16),
+            imageView.heightAnchor.constraint(equalToConstant: 16),
+            textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 5),
+            textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+            textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
+        return cell
+    }
+
+    private func secondaryLabel(_ text: String) -> NSTextField {
+        let f = NSTextField(labelWithString: text)
+        f.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        f.textColor = .secondaryLabelColor
+        f.lineBreakMode = .byTruncatingTail
+        return f
     }
 }
