@@ -15,6 +15,7 @@ APP_BUNDLE  = $(BUILD_DIR)/$(APP_NAME).app
 MACOS_DIR   = $(APP_BUNDLE)/Contents/MacOS
 RES_DIR     = $(APP_BUNDLE)/Contents/Resources
 PLIST_SRC   = Sources/Filesnake/Resources/Info.plist
+ICON_SRC    = Sources/Filesnake/Resources/Filesnake.icns
 INSTALL_DIR = /Applications
 ZIP_NAME    = $(BUILD_DIR)/$(APP_NAME).zip
 
@@ -65,4 +66,5 @@ _bundle:
 	@mkdir -p $(MACOS_DIR) $(RES_DIR)
 	@cp .build/$(SWIFT_BUILD_CONFIG)/$(APP_NAME) $(MACOS_DIR)/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
+	@cp $(ICON_SRC) $(RES_DIR)/$(APP_NAME).icns
 	@echo "Bundle ready: $(APP_BUNDLE)"

@@ -18,7 +18,8 @@ let package = Package(
                 "ZIPFoundation",
                 .product(name: "SWCompression", package: "SWCompression"),
             ],
-            path: "Sources/Filesnake"
+            path: "Sources/Filesnake",
+            exclude: ["Resources/Info.plist", "Resources/Filesnake.icns"]
         )
     ]
 )

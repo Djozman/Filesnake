@@ -18,6 +18,8 @@
     <string>APPL</string>
     <key>CFBundleExecutable</key>
     <string>Filesnake</string>
+    <key>CFBundleIconFile</key>
+    <string>Filesnake</string>
 
     <!-- This is the critical key: tells macOS this is a SwiftUI/AppKit app,
          not a command-line tool. Without it the toolbar, menu bar, first
