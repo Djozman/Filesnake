@@ -8,6 +8,7 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            InlineTopBar(sidebarVisible: $sidebarVisible)
             ThreePaneSplit(
                 left: SidebarView().environmentObject(document),
                 center: VStack(spacing: 0) {
@@ -26,7 +27,7 @@ struct ContentView: View {
             }
         }
         .toolbar {
-            ArchiveToolbar(sidebarVisible: $sidebarVisible)
+            ArchiveToolbar()
         }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
@@ -256,6 +257,31 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         private let centerMin:  CGFloat = 340
         private let previewMin: CGFloat = 220
         private let previewMax: CGFloat = 600
+    }
+}
+
+// MARK: - Inline top bar (guaranteed-visible sidebar toggle)
+
+struct InlineTopBar: View {
+    @Binding var sidebarVisible: Bool
+    var body: some View {
+        HStack(spacing: 0) {
+            Button {
+                sidebarVisible.toggle()
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+            .padding(.leading, 6)
+            Spacer()
+        }
+        .frame(height: 28)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
 

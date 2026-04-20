@@ -2,21 +2,8 @@ import SwiftUI
 
 struct ArchiveToolbar: ToolbarContent {
     @EnvironmentObject var document: ArchiveDocument
-    @Binding var sidebarVisible: Bool
 
     var body: some ToolbarContent {
-        // Sidebar toggle — leading group so macOS renders it at top-left
-        // of the window toolbar even without a NavigationSplitView.
-        ToolbarItemGroup(placement: .navigation) {
-            Button {
-                sidebarVisible.toggle()
-            } label: {
-                Image(systemName: "sidebar.left")
-                    .symbolRenderingMode(.monochrome)
-            }
-            .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-        }
-
         // Search field — centred via .principal
         ToolbarItem(placement: .principal) {
             ToolbarSearchField(text: $document.searchText)

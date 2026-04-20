@@ -14,9 +14,12 @@ struct PreviewPane: View {
                     VStack(spacing: 0) {
                         FitQLPreviewView(url: url)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+                            .layoutPriority(0)
                         Divider()
                         InfoFooter(entry: entry)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(height: 36)
+                            .layoutPriority(1)
                     }
                 } else {
                     InfoCard(entry: entry)
