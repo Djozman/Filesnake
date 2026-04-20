@@ -10,6 +10,25 @@ struct ArchiveListView: View {
     }
 }
 
+// MARK: - NSScrollView that refuses first responder (lets search field keep it)
+
+final class NonFocusableScrollView: NSScrollView {
+    override var acceptsFirstResponder: Bool { false }
+    override func becomeFirstResponder() -> Bool { false }
+}
+
+// MARK: - NSTableView that refuses first responder
+
+final class FilesnakeTableView: NSTableView {
+    override var acceptsFirstResponder: Bool { false }
+    override func becomeFirstResponder() -> Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        // Don't steal focus; just handle selection
+        super.mouseDown(with: event)
+    }
+}
+
 // MARK: - NSViewRepresentable
 
 struct ArchiveNSTableBridge: NSViewRepresentable {
@@ -17,7 +36,7 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSScrollView {
+    func makeNSView(context: Context) -> NonFocusableScrollView {
         let table = FilesnakeTableView()
         table.usesAlternatingRowBackgroundColors = true
         table.allowsMultipleSelection = true
@@ -59,7 +78,7 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
 
         context.coordinator.table = table
 
-        let scroll = NSScrollView()
+        let scroll = NonFocusableScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
@@ -69,7 +88,7 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         return scroll
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    func updateNSView(_ scrollView: NonFocusableScrollView, context: Context) {
         let coord = context.coordinator
         guard let table = scrollView.documentView as? FilesnakeTableView else { return }
         let newEntries = document.filteredEntries
@@ -110,16 +129,6 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
     }
 }
 
-// MARK: - Custom NSTableView
-
-final class FilesnakeTableView: NSTableView {
-    override func mouseDown(with event: NSEvent) {
-        let col = self.column(at: convert(event.locationInWindow, from: nil))
-        if col == 0 { super.mouseDown(with: event); return }
-        super.mouseDown(with: event)
-    }
-}
-
 // MARK: - Coordinator
 
 @MainActor
@@ -131,7 +140,7 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     var sortKey: ArchiveDocument.SortKey = .name
     var sortAscending: Bool = true
     weak var table: FilesnakeTableView?
-    weak var scrollView: NSScrollView?
+    weak var scrollView: NonFocusableScrollView?
 
     // MARK: DataSource
 
@@ -251,7 +260,8 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         let label = count == 1 ? "\"\(targetEntries[0].name)\"" : "\(count) items"
 
         if allChecked || noneChecked {
-            let item = NSMenuItem(title: allChecked ? "Uncheck \(label)" : "Check \(label)",
+            let item = NSMenuItem(
+                title: allChecked ? "Uncheck \(label)" : "Check \(label)",
                 action: #selector(menuToggleCheck(_:)), keyEquivalent: "")
             item.representedObject = targetIDs as NSArray; item.target = self
             menu.addItem(item)
@@ -268,25 +278,30 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             oi.representedObject = folder; oi.target = self
             menu.addItem(oi); menu.addItem(.separator())
         }
-        let ec = NSMenuItem(title: "Extract Checked\u{2026}",
+        let ec = NSMenuItem(
+            title: "Extract Checked\u{2026}",
             action: doc.checked.isEmpty ? nil : #selector(menuExtractChecked(_:)), keyEquivalent: "")
         ec.target = self; ec.isEnabled = !doc.checked.isEmpty
         menu.addItem(ec)
         let hasFiles = targetEntries.contains { !$0.isDirectory }
-        let es = NSMenuItem(title: "Extract Selection\u{2026}",
+        let es = NSMenuItem(
+            title: "Extract Selection\u{2026}",
             action: hasFiles ? #selector(menuExtractSelection(_:)) : nil, keyEquivalent: "")
         es.representedObject = targetIDs as NSArray; es.target = self; es.isEnabled = hasFiles
         menu.addItem(es)
-        let eh = NSMenuItem(title: "Extract Selection Here",
+        let eh = NSMenuItem(
+            title: "Extract Selection Here",
             action: hasFiles ? #selector(menuExtractHere(_:)) : nil, keyEquivalent: "")
         eh.representedObject = targetIDs as NSArray; eh.target = self; eh.isEnabled = hasFiles
         menu.addItem(eh)
         if doc.format?.supportsDeletion == true {
             menu.addItem(.separator())
-            let di = NSMenuItem(title: "Delete Checked from Archive",
+            let di = NSMenuItem(
+                title: "Delete Checked from Archive",
                 action: doc.checked.isEmpty ? nil : #selector(menuDeleteChecked(_:)), keyEquivalent: "")
             di.target = self; di.isEnabled = !doc.checked.isEmpty
-            di.attributedTitle = NSAttributedString(string: "Delete Checked from Archive",
+            di.attributedTitle = NSAttributedString(
+                string: "Delete Checked from Archive",
                 attributes: [.foregroundColor: NSColor.systemRed])
             menu.addItem(di)
         }
