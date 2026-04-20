@@ -13,12 +13,6 @@ struct ContentView: View {
 
             VStack(spacing: 0) {
                 if document.archiveURL != nil {
-                    SearchBarView(text: $document.searchText)
-                        .frame(height: 28)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.bar)
-                        .overlay(alignment: .bottom) { Divider() }
                     FolderBreadcrumbBar()
                         .environmentObject(document)
                 }
@@ -31,11 +25,9 @@ struct ContentView: View {
                 .environmentObject(document)
                 .frame(minWidth: 200, idealWidth: 280)
         }
-        // DividerCursorTracker installs a window-level NSTrackingArea.
-        // It detects mouse position and pushes NSCursor.resizeLeftRight
-        // when hovering over any NSSplitView divider in the window,
-        // regardless of what SwiftUI layers sit on top.
         .background(DividerCursorTracker())
+        // Native macOS search bar — appears in toolbar, no custom NSViewRepresentable needed
+        .searchable(text: $document.searchText, placement: .toolbar, prompt: "Search files\u{2026}")
         .toolbar { ArchiveToolbar() }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
@@ -75,13 +67,6 @@ struct ContentView: View {
 }
 
 // MARK: - Divider cursor tracker
-//
-// HSplitView's SwiftUI hit-test layer intercepts cursor rects, so
-// NSSplitView.resetCursorRects never gets to show the resize cursor.
-// Instead we install one NSTrackingArea on the window's contentView
-// covering the whole window, then on every mouseMoved event we check
-// if the mouse is over an NSSplitView divider strip and push/pop the
-// resize cursor manually via the NSCursor stack.
 
 private struct DividerCursorTracker: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
@@ -111,11 +96,11 @@ private final class TrackerView: NSView {
     override func mouseMoved(with event: NSEvent) {
         guard let contentView = window?.contentView else { return }
         let loc = contentView.convert(event.locationInWindow, from: nil)
-        let overDivider = isOverDivider(loc, in: contentView)
-        if overDivider && !cursorPushed {
+        let over = isOverDivider(loc, in: contentView)
+        if over && !cursorPushed {
             NSCursor.resizeLeftRight.push()
             cursorPushed = true
-        } else if !overDivider && cursorPushed {
+        } else if !over && cursorPushed {
             NSCursor.pop()
             cursorPushed = false
         }
@@ -125,19 +110,17 @@ private final class TrackerView: NSView {
         if cursorPushed { NSCursor.pop(); cursorPushed = false }
     }
 
-    // Walk the view tree to find all NSSplitViews and check
-    // if `point` (in contentView coords) falls in any divider strip.
     private func isOverDivider(_ point: NSPoint, in root: NSView) -> Bool {
         func check(_ view: NSView) -> Bool {
             if let sv = view as? NSSplitView, sv.isVertical {
                 let svPoint = sv.convert(point, from: root)
                 let views = sv.arrangedSubviews
                 for i in 0 ..< views.count - 1 {
-                    let maxX = views[i].frame.maxX
-                    let minX = views[i + 1].frame.minX
-                    let strip = NSRect(x: maxX, y: 0,
-                                      width: max(minX - maxX, sv.dividerThickness),
-                                      height: sv.bounds.height)
+                    let strip = NSRect(
+                        x: views[i].frame.maxX, y: 0,
+                        width: max(views[i+1].frame.minX - views[i].frame.maxX, sv.dividerThickness),
+                        height: sv.bounds.height
+                    )
                     if strip.contains(svPoint) { return true }
                 }
             }
