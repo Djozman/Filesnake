@@ -11,9 +11,6 @@ struct ContentView: View {
                 .environmentObject(document)
                 .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
 
-            // NavigationStack is required for .searchable to work.
-            // It adds no visible navigation UI here — just provides the
-            // hosting context the modifier needs.
             NavigationStack {
                 VStack(spacing: 0) {
                     if document.archiveURL != nil {
@@ -24,7 +21,6 @@ struct ContentView: View {
                         .environmentObject(document)
                 }
                 .navigationTitle("")
-                .navigationBarTitleDisplayMode(.inline)
             }
             .searchable(text: $document.searchText, placement: .toolbar, prompt: "Search files\u{2026}")
             .frame(minWidth: 340, idealWidth: 500)
