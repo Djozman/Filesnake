@@ -12,7 +12,7 @@ struct PreviewPane: View {
                     InfoCard(entry: entry)
                 } else if let url = document.materializeForPreview(entry) {
                     VStack(spacing: 0) {
-                        QuickLookView(url: url)
+                        FitQLPreviewView(url: url)
                         Divider()
                         InfoFooter(entry: entry)
                     }
@@ -34,22 +34,83 @@ struct PreviewPane: View {
     }
 }
 
-private struct QuickLookView: NSViewRepresentable {
+// MARK: - Fit-to-pane QLPreviewView
+
+/// Wraps QLPreviewView and, after each layout pass, scales it so the
+/// content fits entirely within the visible pane — no vertical scrolling needed.
+private struct FitQLPreviewView: NSViewRepresentable {
     let url: URL
 
-    func makeNSView(context: Context) -> QLPreviewView {
-        let view = QLPreviewView(frame: .zero, style: .normal) ?? QLPreviewView()
-        view.autostarts = true
-        view.previewItem = url as QLPreviewItem
-        return view
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView()
+        container.wantsLayer = true
+
+        let preview = QLPreviewView(frame: .zero, style: .normal) ?? QLPreviewView()
+        preview.autostarts = true
+        preview.autoresizingMask = [.width, .height]
+        preview.previewItem = url as QLPreviewItem
+        container.addSubview(preview)
+        context.coordinator.previewView = preview
+
+        return container
     }
 
-    func updateNSView(_ nsView: QLPreviewView, context: Context) {
-        if (nsView.previewItem as? URL) != url {
-            nsView.previewItem = url as QLPreviewItem
+    func updateNSView(_ container: NSView, context: Context) {
+        guard let preview = context.coordinator.previewView else { return }
+        // Update URL if changed
+        if (preview.previewItem as? URL) != url {
+            preview.previewItem = url as QLPreviewItem
+            context.coordinator.pendingFit = true
+        }
+        preview.frame = container.bounds
+        // Schedule fit after QuickLook has rendered
+        if context.coordinator.pendingFit {
+            context.coordinator.pendingFit = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak preview, weak container] in
+                guard let preview, let container else { return }
+                Self.fitContent(preview, in: container)
+            }
         }
     }
+
+    /// Scale the QLPreviewView so its content fills the container height.
+    private static func fitContent(_ preview: QLPreviewView, in container: NSView) {
+        // QLPreviewView exposes `scaleFactor` for setting zoom level.
+        // We walk its subview tree to find the internal scroll view and
+        // read its documentView size, then derive the needed scale.
+        func findScrollView(_ v: NSView) -> NSScrollView? {
+            if let sv = v as? NSScrollView { return sv }
+            for sub in v.subviews {
+                if let found = findScrollView(sub) { return found }
+            }
+            return nil
+        }
+
+        let paneHeight = container.bounds.height
+        guard paneHeight > 0 else { return }
+
+        if let scrollView = findScrollView(preview),
+           let docView = scrollView.documentView {
+            let docHeight = docView.bounds.height
+            guard docHeight > 0 else { return }
+            // Scale so the full document height fits in the pane
+            let scale = min(1.0, paneHeight / docHeight)
+            preview.scaleFactor = scale
+        } else {
+            // Fallback: just set scale to 1.0 (no oversized rendering)
+            preview.scaleFactor = 1.0
+        }
+    }
+
+    final class Coordinator {
+        weak var previewView: QLPreviewView?
+        var pendingFit = true
+    }
 }
+
+// MARK: - Info card (directories / no preview)
 
 private struct InfoCard: View {
     let entry: ArchiveEntry
@@ -77,12 +138,14 @@ private struct InfoCard: View {
     }
 }
 
+// MARK: - Info footer
+
 private struct InfoFooter: View {
     let entry: ArchiveEntry
     var body: some View {
         HStack(spacing: 12) {
             Text(entry.name).bold().lineLimit(1)
-            Text("·").foregroundStyle(.secondary)
+            Text("\u{00b7}").foregroundStyle(.secondary)
             Text(Formatters.bytes(entry.uncompressedSize)).foregroundStyle(.secondary)
             Spacer()
             Text(Formatters.date(entry.modified)).foregroundStyle(.secondary)
