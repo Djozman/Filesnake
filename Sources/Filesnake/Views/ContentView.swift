@@ -13,10 +13,6 @@ struct ContentView: View {
 
             VStack(spacing: 0) {
                 if document.archiveURL != nil {
-                    SearchField()
-                        .environmentObject(document)
-                        .frame(height: 30)
-                    Divider()
                     FolderBreadcrumbBar()
                         .environmentObject(document)
                 }
@@ -29,8 +25,8 @@ struct ContentView: View {
                 .environmentObject(document)
                 .frame(minWidth: 200, idealWidth: 280)
         }
-        .background(DividerCursor())
-        .toolbar { ArchiveToolbar() }
+        .background(DividerCursorTracker())
+        .toolbar { ArchiveToolbar().environmentObject(document) }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
             set: { if !$0 { document.lastError = nil } }
@@ -68,64 +64,22 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Search field (native NSSearchField with real intrinsic height)
+// MARK: - Divider cursor tracker
 
-struct SearchField: NSViewRepresentable {
-    @EnvironmentObject var document: ArchiveDocument
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField()
-        field.placeholderString = "Search files\u{2026}"
-        field.sendsSearchStringImmediately = true
-        field.sendsWholeSearchString = false
-        field.target = context.coordinator
-        field.action = #selector(Coordinator.searchChanged(_:))
-        field.focusRingType = .default
-        context.coordinator.field = field
-        context.coordinator.onChange = { [weak document] text in
-            guard let document else { return }
-            if document.searchText != text { document.searchText = text }
-        }
-        return field
-    }
-
-    func updateNSView(_ field: NSSearchField, context: Context) {
-        guard field.currentEditor() == nil else { return }
-        if field.stringValue != document.searchText {
-            field.stringValue = document.searchText
-        }
-    }
-
-    @MainActor
-    final class Coordinator: NSObject {
-        weak var field: NSSearchField?
-        var onChange: ((String) -> Void)?
-
-        @objc func searchChanged(_ sender: NSSearchField) {
-            onChange?(sender.stringValue)
-        }
-    }
-}
-
-// MARK: - Divider cursor (tracks mouse over NSSplitView dividers)
-
-struct DividerCursor: NSViewRepresentable {
+private struct DividerCursorTracker: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
-        let v = DividerCursorView()
+        let v = TrackerView()
         DispatchQueue.main.async { v.install() }
         return v
     }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ v: NSView, context: Context) {}
 }
 
-private final class DividerCursorView: NSView {
+private final class TrackerView: NSView {
     private var cursorPushed = false
 
     func install() {
-        guard let window = window, let contentView = window.contentView else { return }
-        window.acceptsMouseMovedEvents = true
+        guard let contentView = window?.contentView else { return }
         let area = NSTrackingArea(
             rect: .zero,
             options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
@@ -140,9 +94,11 @@ private final class DividerCursorView: NSView {
         let loc = contentView.convert(event.locationInWindow, from: nil)
         let over = isOverDivider(loc, in: contentView)
         if over && !cursorPushed {
-            NSCursor.resizeLeftRight.push(); cursorPushed = true
+            NSCursor.resizeLeftRight.push()
+            cursorPushed = true
         } else if !over && cursorPushed {
-            NSCursor.pop(); cursorPushed = false
+            NSCursor.pop()
+            cursorPushed = false
         }
     }
 
@@ -151,21 +107,22 @@ private final class DividerCursorView: NSView {
     }
 
     private func isOverDivider(_ point: NSPoint, in root: NSView) -> Bool {
-        func scan(_ view: NSView) -> Bool {
+        func check(_ view: NSView) -> Bool {
             if let sv = view as? NSSplitView, sv.isVertical {
                 let p = sv.convert(point, from: root)
-                let subs = sv.arrangedSubviews
-                for i in 0 ..< max(subs.count - 1, 0) {
-                    let left = subs[i].frame.maxX
-                    let right = subs[i+1].frame.minX
-                    let thickness = max(right - left, sv.dividerThickness, 6)
-                    let strip = NSRect(x: left - 2, y: 0, width: thickness + 4, height: sv.bounds.height)
+                let views = sv.arrangedSubviews
+                for i in 0 ..< views.count - 1 {
+                    let strip = NSRect(
+                        x: views[i].frame.maxX, y: 0,
+                        width: max(views[i+1].frame.minX - views[i].frame.maxX, sv.dividerThickness),
+                        height: sv.bounds.height
+                    )
                     if strip.contains(p) { return true }
                 }
             }
-            return view.subviews.contains { scan($0) }
+            return view.subviews.contains { check($0) }
         }
-        return scan(root)
+        return check(root)
     }
 }
 

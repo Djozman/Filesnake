@@ -4,6 +4,15 @@ struct ArchiveToolbar: ToolbarContent {
     @EnvironmentObject var document: ArchiveDocument
 
     var body: some ToolbarContent {
+        // Search field — always visible, centred in the toolbar.
+        // Using .principal so it sits in the middle of the toolbar
+        // regardless of window size, exactly like Finder's search box.
+        ToolbarItem(placement: .principal) {
+            ToolbarSearchField(text: $document.searchText)
+                .disabled(document.archiveURL == nil)
+                .opacity(document.archiveURL == nil ? 0.4 : 1)
+        }
+
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
                 document.checkAllVisible()
