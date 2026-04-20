@@ -2,14 +2,22 @@ import SwiftUI
 
 struct ArchiveToolbar: ToolbarContent {
     @EnvironmentObject var document: ArchiveDocument
+    @Binding var sidebarVisible: Bool
 
     var body: some ToolbarContent {
-        // Search field — always visible, centred in the toolbar.
-        // Using .principal so it sits in the middle of the toolbar
-        // regardless of window size, exactly like Finder's search box.
+        // Sidebar toggle — top-left navigation slot, standard macOS convention
+        ToolbarItem(placement: .navigation) {
+            Button {
+                sidebarVisible.toggle()
+            } label: {
+                Label("Toggle Sidebar", systemImage: "sidebar.left")
+            }
+            .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+        }
+
+        // Search field — centred via .principal
         ToolbarItem(placement: .principal) {
             ToolbarSearchField(text: $document.searchText)
-                .fixedSize()
                 .disabled(document.archiveURL == nil)
                 .opacity(document.archiveURL == nil ? 0.4 : 1)
         }

@@ -19,15 +19,7 @@ struct ContentView: View {
             sidebarVisible: $sidebarVisible
         )
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    withAnimation { sidebarVisible.toggle() }
-                } label: {
-                    Label("Toggle Sidebar", systemImage: "sidebar.left")
-                }
-                .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-            }
-            ArchiveToolbar()
+            ArchiveToolbar(sidebarVisible: $sidebarVisible)
         }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
@@ -157,7 +149,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             let lockedCenter = max(Self.centerMin, centerWidthAtDragStart)
             let newRight = max(Self.previewMin, min(Self.previewMax, total - leftW - lockedCenter - 2 * dT))
             let h = split.bounds.height
-            subs[1].frame = NSRect(x: leftW + dT,                    y: 0, width: lockedCenter, height: h)
+            subs[1].frame = NSRect(x: leftW + dT,                     y: 0, width: lockedCenter, height: h)
             subs[2].frame = NSRect(x: leftW + dT + lockedCenter + dT, y: 0, width: newRight,     height: h)
         }
 
@@ -192,9 +184,9 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             let rightW  = max(Self.previewMin, min(Self.previewMax, subs[2].frame.width))
             let centerW = max(Self.centerMin, total - leftW - rightW - 2 * dT)
             let h = splitView.bounds.height
-            subs[0].frame = NSRect(x: 0,                      y: 0, width: leftW,   height: h)
-            subs[1].frame = NSRect(x: leftW + dT,             y: 0, width: centerW, height: h)
-            subs[2].frame = NSRect(x: leftW + centerW + 2*dT, y: 0, width: rightW,  height: h)
+            subs[0].frame = NSRect(x: 0,                       y: 0, width: leftW,   height: h)
+            subs[1].frame = NSRect(x: leftW + dT,              y: 0, width: centerW, height: h)
+            subs[2].frame = NSRect(x: leftW + centerW + 2*dT,  y: 0, width: rightW,  height: h)
         }
 
         func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
