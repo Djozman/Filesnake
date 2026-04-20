@@ -26,7 +26,7 @@ struct ContentView: View {
                 .frame(minWidth: 200, idealWidth: 280)
         }
         .background(DividerCursorTracker())
-        .toolbar { ArchiveToolbar().environmentObject(document) }
+        .toolbar { ArchiveToolbar() }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
             set: { if !$0 { document.lastError = nil } }
