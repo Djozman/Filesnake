@@ -43,7 +43,6 @@ private struct FitQLPreviewView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSView {
-        // Use .compact to suppress QL's own toolbar/chrome that eats vertical space
         let preview = QLPreviewView(frame: .zero, style: .compact) ?? QLPreviewView()
         preview.autostarts = true
         preview.previewItem = url as QLPreviewItem
@@ -57,7 +56,6 @@ private struct FitQLPreviewView: NSViewRepresentable {
             ql.previewItem = url as QLPreviewItem
             context.coordinator.needsFit = true
         }
-        // After QL renders, fit the content
         if context.coordinator.needsFit {
             context.coordinator.needsFit = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak ql] in
@@ -67,23 +65,33 @@ private struct FitQLPreviewView: NSViewRepresentable {
         }
     }
 
+    /// Fit-to-pane only for content whose natural height fits within the pane
+    /// (images, PDFs, etc.). For tall text content (README, JSON, source files)
+    /// the document height >> pane height, so we just reset to 1:1 and let
+    /// the user scroll normally.
     private static func fitContent(_ ql: QLPreviewView) {
         func firstScrollView(_ v: NSView) -> NSScrollView? {
             if let sv = v as? NSScrollView { return sv }
-            for sub in v.subviews {
-                if let f = firstScrollView(sub) { return f }
-            }
+            for sub in v.subviews { if let f = firstScrollView(sub) { return f } }
             return nil
         }
-        guard let sv = firstScrollView(ql),
-              let doc = sv.documentView else { return }
-        let pane = ql.bounds.size
+        guard let sv = firstScrollView(ql), let doc = sv.documentView else { return }
+        let pane    = ql.bounds.size
         let content = doc.bounds.size
         guard pane.height > 0, pane.width > 0,
               content.height > 0, content.width > 0 else { return }
-        let scale = min(1.0, min(pane.height / content.height,
-                                  pane.width  / content.width))
+
         sv.allowsMagnification = true
+
+        // If content is a tall scrollable document (text/code/JSON),
+        // content height will be many times the pane — just show at 1x.
+        if content.height > pane.height * 1.5 {
+            sv.setMagnification(1.0, centeredAt: NSPoint(x: content.width / 2, y: content.height))
+            return
+        }
+
+        // For images/PDFs that fit or are close to fitting, scale down to fill pane.
+        let scale = min(1.0, min(pane.height / content.height, pane.width / content.width))
         sv.setMagnification(scale, centeredAt: NSPoint(x: content.width / 2, y: content.height))
     }
 
