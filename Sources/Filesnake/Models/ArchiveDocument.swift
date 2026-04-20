@@ -13,15 +13,23 @@ final class ArchiveDocument: ObservableObject {
     @Published private(set) var isBusy: Bool = false
     @Published var lastError: String?
     @Published private(set) var currentFolderPath: String = ""
+    @Published var sortKey: SortKey = .name
+    @Published var sortAscending: Bool = true
+
+    enum SortKey: String {
+        case name, size, compressed, modified
+    }
 
     private var handler: ArchiveHandler?
     private var previewCacheDir: URL?
 
     var visibleEntries: [ArchiveEntry] {
         let prefix = currentFolderPath
-        return entries.filter { entry in
+        let filtered = entries.filter { entry in
             if prefix.isEmpty {
-                return !entry.path.isEmpty && !entry.parentPath.isEmpty ? entry.parentPath.isEmpty : !entry.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).contains("/")
+                return !entry.path.isEmpty && !entry.parentPath.isEmpty
+                    ? entry.parentPath.isEmpty
+                    : !entry.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).contains("/")
             }
             guard entry.path.hasPrefix(prefix) else { return false }
             let remainder = String(entry.path.dropFirst(prefix.count))
@@ -29,10 +37,7 @@ final class ArchiveDocument: ObservableObject {
             let trimmed = remainder.hasSuffix("/") ? String(remainder.dropLast()) : remainder
             return !trimmed.contains("/")
         }
-        .sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory && !$1.isDirectory }
-            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
+        return sortEntries(filtered)
     }
 
     var filteredEntries: [ArchiveEntry] {
@@ -97,6 +102,15 @@ final class ArchiveDocument: ObservableObject {
         focused = nil
     }
 
+    func toggleSort(key: SortKey) {
+        if sortKey == key {
+            sortAscending.toggle()
+        } else {
+            sortKey = key
+            sortAscending = true
+        }
+    }
+
     var stats: (count: Int, totalSize: UInt64) {
         let files = entries.filter { !$0.isDirectory }
         let total = files.reduce(UInt64(0)) { $0 + $1.uncompressedSize }
@@ -152,7 +166,6 @@ final class ArchiveDocument: ObservableObject {
                 thenOnMain: { NSWorkspace.shared.open(dest) })
     }
 
-    /// Extract specific paths to a destination — used by the right-click context menu.
     func extractPaths(_ paths: [String], to dest: URL) {
         guard let handler else { return }
         runBusy({ try handler.extract(paths: paths, to: dest) },
@@ -211,6 +224,29 @@ final class ArchiveDocument: ObservableObject {
         } catch {
             lastError = error.localizedDescription
             return nil
+        }
+    }
+
+    // MARK: - Sorting
+
+    private func sortEntries(_ list: [ArchiveEntry]) -> [ArchiveEntry] {
+        list.sorted { a, b in
+            // Directories always first
+            if a.isDirectory != b.isDirectory { return a.isDirectory && !b.isDirectory }
+            let asc = sortAscending
+            switch sortKey {
+            case .name:
+                let cmp = a.name.localizedCaseInsensitiveCompare(b.name)
+                return asc ? cmp == .orderedAscending : cmp == .orderedDescending
+            case .size:
+                return asc ? a.uncompressedSize < b.uncompressedSize : a.uncompressedSize > b.uncompressedSize
+            case .compressed:
+                return asc ? a.compressedSize < b.compressedSize : a.compressedSize > b.compressedSize
+            case .modified:
+                let ad = a.modified ?? .distantPast
+                let bd = b.modified ?? .distantPast
+                return asc ? ad < bd : ad > bd
+            }
         }
     }
 
