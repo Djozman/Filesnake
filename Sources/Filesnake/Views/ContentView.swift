@@ -64,24 +64,62 @@ private final class InvisibleSplitView: NSSplitView {
     override func drawDivider(in rect: NSRect) {}
     override var dividerThickness: CGFloat { 1 }
 
-    /// Intercept hits inside any divider rect so QL/text subviews
-    /// cannot steal the mouse drag that should resize the pane.
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let subs = arrangedSubviews
-        let dT   = dividerThickness
-        let hot: CGFloat = 3 // expand hit zone each side
-        for i in 0..<(subs.count - 1) {
-            let subMaxX = subs[i].frame.maxX
-            // Divider occupies [subMaxX, subMaxX + dT]; expand by `hot` pt each side.
-            let divMin = subMaxX - hot
-            let divMax = subMaxX + dT + hot
+    private let hotZone: CGFloat = 4
+
+    private func dividerIndex(at point: NSPoint) -> Int? {
+        let dT = dividerThickness
+        for i in 0..<(arrangedSubviews.count - 1) {
+            let maxX = arrangedSubviews[i].frame.maxX
+            let lo = maxX - hotZone
+            let hi = maxX + dT + hotZone
             if isVertical {
-                if point.x >= divMin && point.x <= divMax { return self }
+                if point.x >= lo && point.x <= hi { return i }
             } else {
-                if point.y >= divMin && point.y <= divMax { return self }
+                if point.y >= lo && point.y <= hi { return i }
             }
         }
+        return nil
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if dividerIndex(at: point) != nil { return self }
         return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if dividerIndex(at: point) != nil {
+            // Let NSSplitView's own mouseDown handle the divider drag,
+            // but make sure self is the hit-tested view so it doesn't
+            // get swallowed by a subview.
+            super.mouseDown(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        super.mouseDragged(with: event)
+    }
+
+    // NSSplitView uses adjustSubviews during live resize tracking.
+    // Returning self from hitTest is sufficient for the split to track
+    // the drag — but QL's NSTextView can still grab mouseDown first via
+    // the responder chain. We break that by becoming the window's first
+    // responder when the click is in a divider zone.
+    override func mouseDownCanMoveWindow() -> Bool { false }
+
+    // Called by the system before mouseDown is dispatched. We promote
+    // ourselves to first responder when the cursor is over a divider,
+    // which prevents QL's text view from receiving the event.
+    override func cursorUpdate(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if dividerIndex(at: point) != nil {
+            window?.makeFirstResponder(self)
+            NSCursor.resizeLeftRight.set()
+        } else {
+            super.cursorUpdate(with: event)
+        }
     }
 }
 
