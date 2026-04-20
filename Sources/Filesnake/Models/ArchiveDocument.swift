@@ -23,7 +23,6 @@ final class ArchiveDocument: ObservableObject {
             if prefix.isEmpty {
                 return !entry.path.isEmpty && !entry.parentPath.isEmpty ? entry.parentPath.isEmpty : !entry.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).contains("/")
             }
-
             guard entry.path.hasPrefix(prefix) else { return false }
             let remainder = String(entry.path.dropFirst(prefix.count))
             guard !remainder.isEmpty else { return false }
@@ -80,8 +79,7 @@ final class ArchiveDocument: ObservableObject {
     func goBack() {
         guard !currentFolderPath.isEmpty else { return }
         let trimmed = currentFolderPath.hasSuffix("/") ? String(currentFolderPath.dropLast()) : currentFolderPath
-        let ns = trimmed as NSString
-        let parent = ns.deletingLastPathComponent
+        let parent = (trimmed as NSString).deletingLastPathComponent
         currentFolderPath = parent.isEmpty ? "" : parent + "/"
         focused = nil
     }
@@ -92,10 +90,7 @@ final class ArchiveDocument: ObservableObject {
     }
 
     func goToBreadcrumb(index: Int) {
-        guard index >= 0 else {
-            goToRoot()
-            return
-        }
+        guard index >= 0 else { goToRoot(); return }
         let parts = breadcrumbs
         guard index < parts.count else { return }
         currentFolderPath = parts.prefix(index + 1).joined(separator: "/") + "/"
@@ -153,11 +148,15 @@ final class ArchiveDocument: ObservableObject {
         panel.message = "Choose a destination folder"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let paths = checkedEntries.filter { !$0.isDirectory }.map { $0.path }
-        runBusy({
-            try handler.extract(paths: paths, to: dest)
-        }, thenOnMain: {
-            NSWorkspace.shared.open(dest)
-        })
+        runBusy({ try handler.extract(paths: paths, to: dest) },
+                thenOnMain: { NSWorkspace.shared.open(dest) })
+    }
+
+    /// Extract specific paths to a destination — used by the right-click context menu.
+    func extractPaths(_ paths: [String], to dest: URL) {
+        guard let handler else { return }
+        runBusy({ try handler.extract(paths: paths, to: dest) },
+                thenOnMain: { NSWorkspace.shared.open(dest) })
     }
 
     func extractAll() {
@@ -168,11 +167,8 @@ final class ArchiveDocument: ObservableObject {
         panel.prompt = "Extract Here"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let paths = entries.filter { !$0.isDirectory }.map { $0.path }
-        runBusy({
-            try handler.extract(paths: paths, to: dest)
-        }, thenOnMain: {
-            NSWorkspace.shared.open(dest)
-        })
+        runBusy({ try handler.extract(paths: paths, to: dest) },
+                thenOnMain: { NSWorkspace.shared.open(dest) })
     }
 
     func deleteSelection() {
@@ -249,9 +245,7 @@ final class ArchiveDocument: ObservableObject {
         let dir = base?
             .appendingPathComponent("Filesnake", isDirectory: true)
             .appendingPathComponent(stamp, isDirectory: true)
-        if let dir {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        }
+        if let dir { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
         return dir
     }
 }
