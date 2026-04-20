@@ -22,6 +22,31 @@ struct SidebarView: View {
 
             if document.archiveURL != nil {
                 Section("Summary") {
+                    let checkedEntries = document.allEntries.filter {
+                        document.checked.contains($0.id) && !$0.isDirectory
+                    }
+                    let checkedSize = checkedEntries.reduce(0) { $0 + $1.uncompressedSize }
+                    let dominantType = Self.dominantType(checkedEntries)
+
+                    HStack {
+                        Label("Checked", systemImage: "checkmark.circle")
+                        Spacer()
+                        Text("\(document.checked.count)").foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Label("Checked Size", systemImage: "scalemass")
+                        Spacer()
+                        Text(checkedSize > 0 ? Formatters.bytes(checkedSize) : "\u{2014}")
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Label("Mostly", systemImage: "tag")
+                        Spacer()
+                        Text(dominantType ?? "\u{2014}").foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Archive Totals") {
                     let (count, size) = document.stats
                     HStack {
                         Label("Files", systemImage: "doc.on.doc")
@@ -29,18 +54,24 @@ struct SidebarView: View {
                         Text("\(count)").foregroundStyle(.secondary)
                     }
                     HStack {
-                        Label("Size", systemImage: "internaldrive")
+                        Label("Total Size", systemImage: "internaldrive")
                         Spacer()
                         Text(Formatters.bytes(size)).foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Label("Checked", systemImage: "checkmark.circle")
-                        Spacer()
-                        Text("\(document.checked.count)").foregroundStyle(.secondary)
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+    }
+
+    private static func dominantType(_ entries: [ArchiveEntry]) -> String? {
+        guard !entries.isEmpty else { return nil }
+        var freq: [String: Int] = [:]
+        for e in entries {
+            let ext = (e.name as NSString).pathExtension.lowercased()
+            let key = ext.isEmpty ? "(no ext)" : ".\(ext)"
+            freq[key, default: 0] += 1
+        }
+        return freq.max(by: { $0.value < $1.value })?.key
     }
 }
