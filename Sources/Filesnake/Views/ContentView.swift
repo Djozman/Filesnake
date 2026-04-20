@@ -11,25 +11,23 @@ struct ContentView: View {
                 .environmentObject(document)
                 .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
 
-            NavigationStack {
-                VStack(spacing: 0) {
-                    if document.archiveURL != nil {
-                        FolderBreadcrumbBar()
-                            .environmentObject(document)
-                    }
-                    ArchiveListView()
+            VStack(spacing: 0) {
+                if document.archiveURL != nil {
+                    SearchField()
+                        .environmentObject(document)
+                    Divider()
+                    FolderBreadcrumbBar()
                         .environmentObject(document)
                 }
-                .navigationTitle("")
+                ArchiveListView()
+                    .environmentObject(document)
             }
-            .searchable(text: $document.searchText, placement: .toolbar, prompt: "Search files\u{2026}")
             .frame(minWidth: 340, idealWidth: 500)
 
             PreviewPane()
                 .environmentObject(document)
                 .frame(minWidth: 200, idealWidth: 280)
         }
-        .background(DividerCursorTracker())
         .toolbar { ArchiveToolbar() }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
@@ -68,67 +66,52 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Divider cursor tracker
+// MARK: - Search field (native NSSearchField, guaranteed to receive keystrokes)
 
-private struct DividerCursorTracker: NSViewRepresentable {
+struct SearchField: NSViewRepresentable {
+    @EnvironmentObject var document: ArchiveDocument
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> NSView {
-        let v = TrackerView()
-        DispatchQueue.main.async { v.install() }
-        return v
+        let container = NSView()
+        let field = NSSearchField()
+        field.placeholderString = "Search files\u{2026}"
+        field.sendsSearchStringImmediately = true
+        field.sendsWholeSearchString = false
+        field.target = context.coordinator
+        field.action = #selector(Coordinator.searchChanged(_:))
+        field.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            field.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            field.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
+            field.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6)
+        ])
+        context.coordinator.field = field
+        context.coordinator.onChange = { [weak document] text in
+            guard let document else { return }
+            if document.searchText != text { document.searchText = text }
+        }
+        return container
     }
-    func updateNSView(_ v: NSView, context: Context) {}
-}
 
-private final class TrackerView: NSView {
-    private var trackingArea: NSTrackingArea?
-    private var cursorPushed = false
-
-    func install() {
-        guard let contentView = window?.contentView else { return }
-        let area = NSTrackingArea(
-            rect: .zero,
-            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        contentView.addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        guard let contentView = window?.contentView else { return }
-        let loc = contentView.convert(event.locationInWindow, from: nil)
-        let over = isOverDivider(loc, in: contentView)
-        if over && !cursorPushed {
-            NSCursor.resizeLeftRight.push()
-            cursorPushed = true
-        } else if !over && cursorPushed {
-            NSCursor.pop()
-            cursorPushed = false
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let field = context.coordinator.field else { return }
+        if field.stringValue != document.searchText {
+            field.stringValue = document.searchText
         }
     }
 
-    override func mouseExited(with event: NSEvent) {
-        if cursorPushed { NSCursor.pop(); cursorPushed = false }
-    }
+    @MainActor
+    final class Coordinator: NSObject {
+        weak var field: NSSearchField?
+        var onChange: ((String) -> Void)?
 
-    private func isOverDivider(_ point: NSPoint, in root: NSView) -> Bool {
-        func check(_ view: NSView) -> Bool {
-            if let sv = view as? NSSplitView, sv.isVertical {
-                let svPoint = sv.convert(point, from: root)
-                let views = sv.arrangedSubviews
-                for i in 0 ..< views.count - 1 {
-                    let strip = NSRect(
-                        x: views[i].frame.maxX, y: 0,
-                        width: max(views[i+1].frame.minX - views[i].frame.maxX, sv.dividerThickness),
-                        height: sv.bounds.height
-                    )
-                    if strip.contains(svPoint) { return true }
-                }
-            }
-            return view.subviews.contains { check($0) }
+        @objc func searchChanged(_ sender: NSSearchField) {
+            onChange?(sender.stringValue)
         }
-        return check(root)
     }
 }
 
