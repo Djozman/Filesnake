@@ -16,6 +16,7 @@ struct PreviewPane: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         Divider()
                         InfoFooter(entry: entry)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
                     InfoCard(entry: entry)
@@ -134,15 +135,17 @@ private struct InfoFooter: View {
     let entry: ArchiveEntry
     var body: some View {
         HStack(spacing: 12) {
-            Text(entry.name).bold().lineLimit(1)
+            Text(entry.name).bold().lineLimit(1).truncationMode(.middle)
             Text("\u{00b7}").foregroundStyle(.secondary)
-            Text(Formatters.bytes(entry.uncompressedSize)).foregroundStyle(.secondary)
-            Spacer()
-            Text(Formatters.date(entry.modified)).foregroundStyle(.secondary)
+            Text(Formatters.bytes(entry.uncompressedSize))
+                .foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+            Spacer(minLength: 8)
+            Text(Formatters.date(entry.modified))
+                .foregroundStyle(.secondary).lineLimit(1)
         }
         .font(.callout)
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .frame(height: 34)
         .background(.bar)
     }
 }

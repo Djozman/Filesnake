@@ -10,7 +10,9 @@ struct FilesnakeApp: App {
             ContentView()
                 .environmentObject(document)
                 .frame(minWidth: 900, minHeight: 560)
+                .navigationTitle("")
         }
+        .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Open\u{2026}") {

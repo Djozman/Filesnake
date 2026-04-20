@@ -5,12 +5,14 @@ struct ArchiveToolbar: ToolbarContent {
     @Binding var sidebarVisible: Bool
 
     var body: some ToolbarContent {
-        // Sidebar toggle — top-left navigation slot, standard macOS convention
-        ToolbarItem(placement: .navigation) {
+        // Sidebar toggle — leading group so macOS renders it at top-left
+        // of the window toolbar even without a NavigationSplitView.
+        ToolbarItemGroup(placement: .navigation) {
             Button {
                 sidebarVisible.toggle()
             } label: {
                 Image(systemName: "sidebar.left")
+                    .symbolRenderingMode(.monochrome)
             }
             .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
         }
