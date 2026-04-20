@@ -77,10 +77,11 @@ final class ArchiveDocument: ObservableObject {
         panel.message = "Choose a destination folder"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let paths = selectedEntries.filter { !$0.isDirectory }.map { $0.path }
-        runBusy {
+        runBusy({
             try handler.extract(paths: paths, to: dest)
+        }, thenOnMain: {
             NSWorkspace.shared.open(dest)
-        }
+        })
     }
 
     func extractAll() {
@@ -91,10 +92,11 @@ final class ArchiveDocument: ObservableObject {
         panel.prompt = "Extract Here"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let paths = entries.filter { !$0.isDirectory }.map { $0.path }
-        runBusy {
+        runBusy({
             try handler.extract(paths: paths, to: dest)
+        }, thenOnMain: {
             NSWorkspace.shared.open(dest)
-        }
+        })
     }
 
     func deleteSelection() {
@@ -109,10 +111,14 @@ final class ArchiveDocument: ObservableObject {
         prompt.addButton(withTitle: "Delete")
         prompt.addButton(withTitle: "Cancel")
         guard prompt.runModal() == .alertFirstButtonReturn else { return }
-        runBusy {
+        runBusy({
             try handler.delete(paths: paths)
-            try self.refreshEntries()
-        }
+            return try handler.list()
+        }, thenOnMain: { [weak self] newEntries in
+            guard let self else { return }
+            self.entries = newEntries
+            self.selection = self.selection.filter { id in newEntries.contains { $0.id == id } }
+        })
     }
 
     func materializeForPreview(_ entry: ArchiveEntry) -> URL? {
@@ -133,18 +139,18 @@ final class ArchiveDocument: ObservableObject {
         }
     }
 
-    private func refreshEntries() throws {
-        guard let handler else { return }
-        entries = try handler.list()
-        selection = selection.filter { id in entries.contains { $0.id == id } }
-    }
-
-    private func runBusy(_ work: @escaping () throws -> Void) {
+    private func runBusy<T>(
+        _ work: @escaping () throws -> T,
+        thenOnMain apply: @escaping (T) -> Void
+    ) {
         isBusy = true
         Task.detached { [weak self] in
             do {
-                try work()
-                await MainActor.run { self?.isBusy = false }
+                let result = try work()
+                await MainActor.run {
+                    apply(result)
+                    self?.isBusy = false
+                }
             } catch {
                 await MainActor.run {
                     self?.lastError = error.localizedDescription
