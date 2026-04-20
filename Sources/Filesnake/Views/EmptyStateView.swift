@@ -10,10 +10,10 @@ struct EmptyStateView: View {
                 .foregroundStyle(.secondary)
             Text("Drop an archive here")
                 .font(.title2)
-            Text("Supports .zip, .tar, .tar.gz, .gz (RAR coming soon)")
+            Text("Supports .zip, .tar, .tar.gz, .gz, .rar")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Button("Open Archive…") {
+            Button("Open Archive\u{2026}") {
                 let panel = NSOpenPanel()
                 panel.allowedContentTypes = ArchiveFormat.allowedOpenTypes
                 panel.allowsMultipleSelection = false
