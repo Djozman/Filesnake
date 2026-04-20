@@ -36,8 +36,6 @@ struct PreviewPane: View {
 
 // MARK: - Fit-to-pane QLPreviewView
 
-/// Wraps QLPreviewView and, after each layout pass, scales it so the
-/// content fits entirely within the visible pane — no vertical scrolling needed.
 private struct FitQLPreviewView: NSViewRepresentable {
     let url: URL
 
@@ -46,40 +44,38 @@ private struct FitQLPreviewView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
         container.wantsLayer = true
-
         let preview = QLPreviewView(frame: .zero, style: .normal) ?? QLPreviewView()
         preview.autostarts = true
         preview.autoresizingMask = [.width, .height]
         preview.previewItem = url as QLPreviewItem
         container.addSubview(preview)
         context.coordinator.previewView = preview
-
         return container
     }
 
     func updateNSView(_ container: NSView, context: Context) {
         guard let preview = context.coordinator.previewView else { return }
-        // Update URL if changed
         if (preview.previewItem as? URL) != url {
             preview.previewItem = url as QLPreviewItem
             context.coordinator.pendingFit = true
         }
         preview.frame = container.bounds
-        // Schedule fit after QuickLook has rendered
         if context.coordinator.pendingFit {
             context.coordinator.pendingFit = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak preview, weak container] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak preview, weak container] in
                 guard let preview, let container else { return }
                 Self.fitContent(preview, in: container)
             }
         }
     }
 
-    /// Scale the QLPreviewView so its content fills the container height.
+    /// Walk the QLPreviewView subview tree, find the first NSScrollView,
+    /// and set its magnification so the document height fits the pane.
+    /// Falls back gracefully if the internal structure isn't found.
     private static func fitContent(_ preview: QLPreviewView, in container: NSView) {
-        // QLPreviewView exposes `scaleFactor` for setting zoom level.
-        // We walk its subview tree to find the internal scroll view and
-        // read its documentView size, then derive the needed scale.
+        let paneSize = container.bounds.size
+        guard paneSize.height > 0, paneSize.width > 0 else { return }
+
         func findScrollView(_ v: NSView) -> NSScrollView? {
             if let sv = v as? NSScrollView { return sv }
             for sub in v.subviews {
@@ -88,20 +84,19 @@ private struct FitQLPreviewView: NSViewRepresentable {
             return nil
         }
 
-        let paneHeight = container.bounds.height
-        guard paneHeight > 0 else { return }
+        guard let scrollView = findScrollView(preview),
+              let docView = scrollView.documentView else { return }
 
-        if let scrollView = findScrollView(preview),
-           let docView = scrollView.documentView {
-            let docHeight = docView.bounds.height
-            guard docHeight > 0 else { return }
-            // Scale so the full document height fits in the pane
-            let scale = min(1.0, paneHeight / docHeight)
-            preview.scaleFactor = scale
-        } else {
-            // Fallback: just set scale to 1.0 (no oversized rendering)
-            preview.scaleFactor = 1.0
-        }
+        let docSize = docView.bounds.size
+        guard docSize.height > 0, docSize.width > 0 else { return }
+
+        // Compute scale to fit both dimensions, cap at 1.0 to avoid upscaling
+        let scaleH = paneSize.height / docSize.height
+        let scaleW = paneSize.width  / docSize.width
+        let scale  = min(1.0, min(scaleH, scaleW))
+
+        scrollView.allowsMagnification = true
+        scrollView.setMagnification(scale, centeredAt: .zero)
     }
 
     final class Coordinator {
@@ -110,7 +105,7 @@ private struct FitQLPreviewView: NSViewRepresentable {
     }
 }
 
-// MARK: - Info card (directories / no preview)
+// MARK: - Info card
 
 private struct InfoCard: View {
     let entry: ArchiveEntry
@@ -128,7 +123,6 @@ private struct InfoCard: View {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-
     private func row(_ key: String, _ value: String) -> some View {
         HStack {
             Text(key).foregroundStyle(.secondary)
