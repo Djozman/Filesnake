@@ -74,9 +74,15 @@ struct ContentView: View {
 final class FilesnakeSplitView: NSSplitView {
     override func resetCursorRects() {
         super.resetCursorRects()
-        for i in 0 ..< arrangedSubviews.count - 1 {
-            // rect(ofDivider:) is the correct NSSplitView API
-            addCursorRect(rect(ofDivider: i), cursor: .resizeLeftRight)
+        // NSSplitView has no public API to get a divider rect by index.
+        // The divider sits between subview[i].maxX and subview[i+1].minX.
+        // We compute it manually and register the resize cursor on that strip.
+        let views = arrangedSubviews
+        for i in 0 ..< views.count - 1 {
+            let left  = views[i].frame.maxX
+            let right = views[i + 1].frame.minX
+            let divRect = NSRect(x: left, y: 0, width: max(right - left, dividerThickness), height: bounds.height)
+            addCursorRect(divRect, cursor: .resizeLeftRight)
         }
     }
 }
