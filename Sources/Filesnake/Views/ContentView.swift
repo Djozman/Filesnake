@@ -74,10 +74,9 @@ struct ContentView: View {
 final class FilesnakeSplitView: NSSplitView {
     override func resetCursorRects() {
         super.resetCursorRects()
-        // Use a local name to avoid collision with the inherited method dividerRect(ofDividerAt:)
         for i in 0 ..< arrangedSubviews.count - 1 {
-            let rect = self.dividerRect(ofDividerAt: i)
-            addCursorRect(rect, cursor: .resizeLeftRight)
+            // rect(ofDivider:) is the correct NSSplitView API
+            addCursorRect(rect(ofDivider: i), cursor: .resizeLeftRight)
         }
     }
 }
