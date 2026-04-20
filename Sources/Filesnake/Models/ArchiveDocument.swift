@@ -22,6 +22,11 @@ final class ArchiveDocument: ObservableObject {
 
     private var handler: ArchiveHandler?
     private var previewCacheDir: URL?
+    /// Lazily built cache: directory path prefix -> recursive uncompressed size
+    private var folderSizeCache: [String: UInt64] = [:]
+    private var folderCompressedSizeCache: [String: UInt64] = [:]
+
+    // MARK: - Computed lists
 
     var visibleEntries: [ArchiveEntry] {
         let prefix = currentFolderPath
@@ -29,7 +34,9 @@ final class ArchiveDocument: ObservableObject {
             if prefix.isEmpty {
                 return !entry.path.isEmpty && !entry.parentPath.isEmpty
                     ? entry.parentPath.isEmpty
-                    : !entry.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).contains("/")
+                    : !entry.path
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                        .contains("/")
             }
             guard entry.path.hasPrefix(prefix) else { return false }
             let remainder = String(entry.path.dropFirst(prefix.count))
@@ -59,9 +66,38 @@ final class ArchiveDocument: ObservableObject {
 
     var breadcrumbs: [String] {
         guard !currentFolderPath.isEmpty else { return [] }
-        let trimmed = currentFolderPath.hasSuffix("/") ? String(currentFolderPath.dropLast()) : currentFolderPath
+        let trimmed = currentFolderPath.hasSuffix("/")
+            ? String(currentFolderPath.dropLast()) : currentFolderPath
         return trimmed.split(separator: "/").map(String.init)
     }
+
+    // MARK: - Folder sizes
+
+    /// Recursive uncompressed size of all files inside a directory entry.
+    func folderSize(for entry: ArchiveEntry) -> UInt64 {
+        guard entry.isDirectory else { return entry.uncompressedSize }
+        let key = normalizedDirectoryPath(for: entry.path)
+        if let cached = folderSizeCache[key] { return cached }
+        let size = entries
+            .filter { !$0.isDirectory && $0.path.hasPrefix(key) }
+            .reduce(UInt64(0)) { $0 + $1.uncompressedSize }
+        folderSizeCache[key] = size
+        return size
+    }
+
+    /// Recursive compressed size of all files inside a directory entry.
+    func folderCompressedSize(for entry: ArchiveEntry) -> UInt64 {
+        guard entry.isDirectory else { return entry.compressedSize }
+        let key = normalizedDirectoryPath(for: entry.path)
+        if let cached = folderCompressedSizeCache[key] { return cached }
+        let size = entries
+            .filter { !$0.isDirectory && $0.path.hasPrefix(key) }
+            .reduce(UInt64(0)) { $0 + $1.compressedSize }
+        folderCompressedSizeCache[key] = size
+        return size
+    }
+
+    // MARK: - Navigation
 
     func toggleChecked(_ id: ArchiveEntry.ID) {
         if checked.contains(id) { checked.remove(id) } else { checked.insert(id) }
@@ -71,9 +107,7 @@ final class ArchiveDocument: ObservableObject {
         for e in filteredEntries { checked.insert(e.id) }
     }
 
-    func uncheckAll() {
-        checked.removeAll()
-    }
+    func uncheckAll() { checked.removeAll() }
 
     func enterFolder(_ entry: ArchiveEntry) {
         guard entry.isDirectory else { return }
@@ -83,16 +117,14 @@ final class ArchiveDocument: ObservableObject {
 
     func goBack() {
         guard !currentFolderPath.isEmpty else { return }
-        let trimmed = currentFolderPath.hasSuffix("/") ? String(currentFolderPath.dropLast()) : currentFolderPath
+        let trimmed = currentFolderPath.hasSuffix("/")
+            ? String(currentFolderPath.dropLast()) : currentFolderPath
         let parent = (trimmed as NSString).deletingLastPathComponent
         currentFolderPath = parent.isEmpty ? "" : parent + "/"
         focused = nil
     }
 
-    func goToRoot() {
-        currentFolderPath = ""
-        focused = nil
-    }
+    func goToRoot() { currentFolderPath = ""; focused = nil }
 
     func goToBreadcrumb(index: Int) {
         guard index >= 0 else { goToRoot(); return }
@@ -103,19 +135,16 @@ final class ArchiveDocument: ObservableObject {
     }
 
     func toggleSort(key: SortKey) {
-        if sortKey == key {
-            sortAscending.toggle()
-        } else {
-            sortKey = key
-            sortAscending = true
-        }
+        if sortKey == key { sortAscending.toggle() }
+        else { sortKey = key; sortAscending = true }
     }
 
     var stats: (count: Int, totalSize: UInt64) {
         let files = entries.filter { !$0.isDirectory }
-        let total = files.reduce(UInt64(0)) { $0 + $1.uncompressedSize }
-        return (files.count, total)
+        return (files.count, files.reduce(0) { $0 + $1.uncompressedSize })
     }
+
+    // MARK: - Open / Close
 
     func open(url: URL) {
         close()
@@ -132,6 +161,8 @@ final class ArchiveDocument: ObservableObject {
             self.focused = nil
             self.searchText = ""
             self.currentFolderPath = ""
+            self.folderSizeCache = [:]
+            self.folderCompressedSizeCache = [:]
             self.previewCacheDir = makePreviewCacheDir(for: url)
         } catch {
             lastError = error.localizedDescription
@@ -139,27 +170,21 @@ final class ArchiveDocument: ObservableObject {
     }
 
     func close() {
-        handler = nil
-        archiveURL = nil
-        format = nil
-        entries = []
-        checked = []
-        focused = nil
-        searchText = ""
-        currentFolderPath = ""
-        if let dir = previewCacheDir {
-            try? FileManager.default.removeItem(at: dir)
-        }
+        handler = nil; archiveURL = nil; format = nil
+        entries = []; checked = []; focused = nil
+        searchText = ""; currentFolderPath = ""
+        folderSizeCache = [:]; folderCompressedSizeCache = [:]
+        if let dir = previewCacheDir { try? FileManager.default.removeItem(at: dir) }
         previewCacheDir = nil
     }
+
+    // MARK: - Extract / Delete
 
     func extractSelection() {
         guard let handler, !checked.isEmpty else { return }
         let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.prompt = "Extract Here"
-        panel.message = "Choose a destination folder"
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        panel.prompt = "Extract Here"; panel.message = "Choose a destination folder"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let paths = checkedEntries.filter { !$0.isDirectory }.map { $0.path }
         runBusy({ try handler.extract(paths: paths, to: dest) },
@@ -175,8 +200,7 @@ final class ArchiveDocument: ObservableObject {
     func extractAll() {
         guard let handler else { return }
         let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.prompt = "Extract Here"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let paths = entries.filter { !$0.isDirectory }.map { $0.path }
@@ -186,26 +210,25 @@ final class ArchiveDocument: ObservableObject {
 
     func deleteSelection() {
         guard let handler, format?.supportsDeletion == true else {
-            lastError = "This archive type does not support deletion."
-            return
+            lastError = "This archive type does not support deletion."; return
         }
         let paths = checkedEntries.map { $0.path }
-        let prompt = NSAlert()
-        prompt.messageText = "Delete \(paths.count) entry(ies) from archive?"
-        prompt.informativeText = "This rewrites the archive and cannot be undone."
-        prompt.addButton(withTitle: "Delete")
-        prompt.addButton(withTitle: "Cancel")
-        guard prompt.runModal() == .alertFirstButtonReturn else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete \(paths.count) entry(ies) from archive?"
+        alert.informativeText = "This rewrites the archive and cannot be undone."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         runBusy({
             try handler.delete(paths: paths)
             return try handler.list()
         }, thenOnMain: { [weak self] newEntries in
             guard let self else { return }
             self.entries = newEntries
+            self.folderSizeCache = [:]
+            self.folderCompressedSizeCache = [:]
             self.checked = self.checked.filter { id in newEntries.contains { $0.id == id } }
-            if let f = self.focused, !newEntries.contains(where: { $0.id == f }) {
-                self.focused = nil
-            }
+            if let f = self.focused, !newEntries.contains(where: { $0.id == f }) { self.focused = nil }
         })
     }
 
@@ -215,16 +238,11 @@ final class ArchiveDocument: ObservableObject {
         if FileManager.default.fileExists(atPath: target.path) { return target }
         do {
             try FileManager.default.createDirectory(
-                at: target.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+                at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             let data = try handler.extractToMemory(path: entry.path)
             try data.write(to: target)
             return target
-        } catch {
-            lastError = error.localizedDescription
-            return nil
-        }
+        } catch { lastError = error.localizedDescription; return nil }
     }
 
     // MARK: - Sorting
@@ -238,9 +256,13 @@ final class ArchiveDocument: ObservableObject {
                 let cmp = a.name.localizedCaseInsensitiveCompare(b.name)
                 return asc ? cmp == .orderedAscending : cmp == .orderedDescending
             case .size:
-                return asc ? a.uncompressedSize < b.uncompressedSize : a.uncompressedSize > b.uncompressedSize
+                let sa = a.isDirectory ? folderSize(for: a) : a.uncompressedSize
+                let sb = b.isDirectory ? folderSize(for: b) : b.uncompressedSize
+                return asc ? sa < sb : sa > sb
             case .compressed:
-                return asc ? a.compressedSize < b.compressedSize : a.compressedSize > b.compressedSize
+                let ca = a.isDirectory ? folderCompressedSize(for: a) : a.compressedSize
+                let cb = b.isDirectory ? folderCompressedSize(for: b) : b.compressedSize
+                return asc ? ca < cb : ca > cb
             case .modified:
                 let ad = a.modified ?? .distantPast
                 let bd = b.modified ?? .distantPast
@@ -249,35 +271,25 @@ final class ArchiveDocument: ObservableObject {
         }
     }
 
+    // MARK: - Helpers
+
     private func normalizedDirectoryPath(for path: String) -> String {
         path.hasSuffix("/") ? path : path + "/"
     }
-
-    // MARK: - runBusy (Swift 6 safe)
-    //
-    // Capture `self` as a local `ObjectIdentifier`-keyed weak ref so the
-    // Task.detached closure only holds a Sendable `ID` value, not `var self`.
 
     private func runBusy<T: Sendable>(
         _ work: @escaping @Sendable () throws -> T,
         thenOnMain apply: @escaping @MainActor (T) -> Void
     ) {
         isBusy = true
-        // Capture a weak actor reference safely via a Sendable box.
         let box = WeakBox(self)
         Task.detached {
             do {
                 let result = try work()
-                await MainActor.run {
-                    apply(result)
-                    box.value?.isBusy = false
-                }
+                await MainActor.run { apply(result); box.value?.isBusy = false }
             } catch {
                 let msg = error.localizedDescription
-                await MainActor.run {
-                    box.value?.lastError = msg
-                    box.value?.isBusy = false
-                }
+                await MainActor.run { box.value?.lastError = msg; box.value?.isBusy = false }
             }
         }
     }
