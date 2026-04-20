@@ -10,18 +10,10 @@ struct FilesnakeApp: App {
             ContentView()
                 .environmentObject(document)
                 .frame(minWidth: 900, minHeight: 560)
-                .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                    guard let provider = providers.first else { return false }
-                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                        guard let url else { return }
-                        Task { @MainActor in document.open(url: url) }
-                    }
-                    return true
-                }
         }
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Open…") {
+                Button("Open\u{2026}") {
                     let panel = NSOpenPanel()
                     panel.allowedContentTypes = ArchiveFormat.allowedOpenTypes
                     panel.allowsMultipleSelection = false
