@@ -6,7 +6,6 @@ final class RarHandler: ArchiveHandler {
 
     init(url: URL) throws {
         self.url = url
-        // Validate we can actually read it
         _ = try Self.runTool(args: ["l", url.path])
     }
 
@@ -20,11 +19,10 @@ final class RarHandler: ArchiveHandler {
         let tool = try Self.toolPath()
         let isUnar = tool.hasSuffix("unar")
         for path in paths {
-            var args: [String]
+            let args: [String]
             if isUnar {
                 args = ["-o", destination.path, url.path, path]
             } else {
-                // unrar: e = extract without paths, x = extract with paths
                 args = ["x", "-y", url.path, path, destination.path + "/"]
             }
             try Self.runToolAt(path: tool, args: args)
@@ -36,7 +34,6 @@ final class RarHandler: ArchiveHandler {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
         try extract(paths: [path], to: tmp)
-        // Find extracted file anywhere under tmp
         let fm = FileManager.default
         if let enumerator = fm.enumerator(at: tmp, includingPropertiesForKeys: nil) {
             for case let fileURL as URL in enumerator {
@@ -49,7 +46,7 @@ final class RarHandler: ArchiveHandler {
         throw ArchiveError.notFound("Could not locate extracted file for: \(path)")
     }
 
-    // MARK: – Private helpers
+    // MARK: - Private helpers
 
     @discardableResult
     private static func runTool(args: [String]) throws -> String {
@@ -62,9 +59,9 @@ final class RarHandler: ArchiveHandler {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
         proc.arguments = args
-        let pipe = Pipe()
+        let outPipe = Pipe()
         let errPipe = Pipe()
-        proc.standardOutput = pipe
+        proc.standardOutput = outPipe
         proc.standardError = errPipe
         do {
             try proc.run()
@@ -72,11 +69,12 @@ final class RarHandler: ArchiveHandler {
             throw ArchiveError.extractFailed("Failed to launch \(path): \(error.localizedDescription)")
         }
         proc.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8) ?? ""
+        let output = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         guard proc.terminationStatus == 0 else {
             let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            throw ArchiveError.extractFailed("\(URL(fileURLWithPath: path).lastPathComponent) exited \(proc.terminationStatus): \(err)")
+            throw ArchiveError.extractFailed(
+                "\(URL(fileURLWithPath: path).lastPathComponent) exited \(proc.terminationStatus): \(err)"
+            )
         }
         return output
     }
@@ -97,36 +95,26 @@ final class RarHandler: ArchiveHandler {
         )
     }
 
-    // MARK: – List parsing for `unrar l -v`
+    // MARK: - List parsing
 
     private static func parseList(output: String) -> [ArchiveEntry] {
-        // unrar l -v produces lines like:
-        //  Size   Ratio  Date    Time   Attr  Name
-        // -------  ----- -------- ----- ------ ----
-        //  123456  45%  2024-01-01 10:00  .....  path/to/file.txt
-        // unar list output is much simpler: one path per line after a header.
         var entries: [ArchiveEntry] = []
         let lines = output.components(separatedBy: "\n")
-
-        // Try unrar -v format first
         var inBody = false
-        let divider = CharacterSet(charactersIn: "-")
+
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.allSatisfy({ "-".contains($0) }) && trimmed.count > 10 {
+            // Detect the separator lines (all dashes) that bracket the file list
+            if !trimmed.isEmpty && trimmed.allSatisfy({ $0 == "-" }) && trimmed.count > 10 {
                 inBody.toggle()
                 continue
             }
             guard inBody, !trimmed.isEmpty else { continue }
-            // Columns: Attr Size   Ratio  Date     Time    Name
-            // Example: .....  123456  45% 2024-01-01 10:00:00 path/to/file
             let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true)
             guard parts.count >= 5 else { continue }
             let attrs = String(parts[0])
             let isDir = attrs.contains("D")
-            let sizeStr = String(parts[1])
-            let uncompressedSize = UInt64(sizeStr) ?? 0
-            // Last element is the path (may contain spaces but split will break it — good enough for typical archives)
+            let uncompressedSize = UInt64(String(parts[1])) ?? 0
             let path = parts.last.map(String.init) ?? ""
             guard !path.isEmpty else { continue }
             entries.append(ArchiveEntry(
@@ -139,7 +127,7 @@ final class RarHandler: ArchiveHandler {
             ))
         }
 
-        // If nothing parsed, fall back: treat every non-empty non-header line as a file path
+        // Fallback: treat every plausible line as a path
         if entries.isEmpty {
             for line in lines {
                 let t = line.trimmingCharacters(in: .whitespaces)

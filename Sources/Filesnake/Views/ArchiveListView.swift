@@ -41,7 +41,6 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let table = FilesnakeTableView()
         table.usesAlternatingRowBackgroundColors = true
-        // Multi-selection: allow drag-select, Shift+click, Cmd+click
         table.allowsMultipleSelection = true
         table.allowsEmptySelection = true
         table.allowsColumnSelection = false
@@ -53,42 +52,33 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         table.doubleAction = #selector(Coordinator.rowDoubleClicked(_:))
         table.target = context.coordinator
 
-        // Checkbox column — narrow, no header
-        let checkCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("check"))
+        let checkCol = NSTableColumn(identifier: .init("check"))
         checkCol.title = ""
-        checkCol.width = 28
-        checkCol.minWidth = 28
-        checkCol.maxWidth = 28
+        checkCol.width = 28; checkCol.minWidth = 28; checkCol.maxWidth = 28
         checkCol.isEditable = false
         table.addTableColumn(checkCol)
 
-        let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
+        let nameCol = NSTableColumn(identifier: .init("name"))
         nameCol.title = "Name"
         nameCol.minWidth = 120
         nameCol.isEditable = false
         table.addTableColumn(nameCol)
 
-        let sizeCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
+        let sizeCol = NSTableColumn(identifier: .init("size"))
         sizeCol.title = "Size"
-        sizeCol.width = 80
-        sizeCol.minWidth = 60
-        sizeCol.maxWidth = 140
+        sizeCol.width = 80; sizeCol.minWidth = 60; sizeCol.maxWidth = 140
         sizeCol.isEditable = false
         table.addTableColumn(sizeCol)
 
-        let compCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("compressed"))
+        let compCol = NSTableColumn(identifier: .init("compressed"))
         compCol.title = "Compressed"
-        compCol.width = 90
-        compCol.minWidth = 70
-        compCol.maxWidth = 140
+        compCol.width = 90; compCol.minWidth = 70; compCol.maxWidth = 140
         compCol.isEditable = false
         table.addTableColumn(compCol)
 
-        let modCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("modified"))
+        let modCol = NSTableColumn(identifier: .init("modified"))
         modCol.title = "Modified"
-        modCol.width = 140
-        modCol.minWidth = 100
-        modCol.maxWidth = 200
+        modCol.width = 140; modCol.minWidth = 100; modCol.maxWidth = 200
         modCol.isEditable = false
         table.addTableColumn(modCol)
 
@@ -121,42 +111,29 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
     }
 }
 
-// MARK: - Custom NSTableView (fixes click recognition)
+// MARK: - Custom NSTableView
 
-/// Subclass so we can intercept mouseDown and cleanly separate
-/// checkbox-column clicks from row-selection drag/multi-select.
 final class FilesnakeTableView: NSTableView {
-
     override func mouseDown(with event: NSEvent) {
         let localPoint = convert(event.locationInWindow, from: nil)
-        let row = self.row(at: localPoint)
         let col = self.column(at: localPoint)
-
-        // If the click lands in the checkbox column, handle ONLY the checkbox;
-        // do NOT start a drag-selection or change the row selection.
-        if col == 0 && row >= 0 {
-            // Let the cell view handle the checkbox toggle via its action;
-            // forward to super only the mouseDown so the button activates,
-            // but block selection change by bypassing super's drag tracking.
+        // checkbox column: let the button handle it, skip selection logic
+        if col == 0 {
             super.mouseDown(with: event)
             return
         }
-
-        // For all other columns: let NSTableView do its full multi-select logic
-        // (drag rubber-band, Shift+click extend, Cmd+click toggle).
         super.mouseDown(with: event)
     }
 }
 
-// MARK: - Coordinator (DataSource + Delegate)
+// MARK: - Coordinator
 
+@MainActor
 final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     var entries: [ArchiveEntry] = []
     var checkedSnapshot: Set<ArchiveEntry.ID> = []
     var document: ArchiveDocument?
     weak var table: FilesnakeTableView?
-
-    // MARK: DataSource
 
     func numberOfRows(in tableView: NSTableView) -> Int {
         entries.count
@@ -177,7 +154,6 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
             } else {
                 btn = NSButton(checkboxWithTitle: "", target: self, action: #selector(checkboxClicked(_:)))
                 btn.identifier = cellID
-                // Prevent the checkbox from participating in row selection
                 btn.refusesFirstResponder = true
             }
             btn.state = checkedSnapshot.contains(entry.id) ? .on : .off
@@ -195,28 +171,16 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
                 cell = makeNameCell()
                 cell.identifier = cellID
             }
-            cell.textField?.stringValue = entry.name
             cell.imageView?.image = FileIcon.icon(for: entry)
-            if entry.isDirectory {
-                cell.textField?.textColor = .labelColor
-            } else {
-                cell.textField?.textColor = .labelColor
-            }
-            // Show disclosure chevron inside the text for folders
-            cell.textField?.stringValue = entry.isDirectory
-                ? entry.name + "  \u{203a}"
-                : entry.name
+            cell.textField?.stringValue = entry.isDirectory ? entry.name + "  \u{203a}" : entry.name
+            cell.textField?.textColor = .labelColor
             return cell
 
         case "size":
-            return secondaryLabel(
-                entry.isDirectory ? "\u{2014}" : Formatters.bytes(entry.uncompressedSize)
-            )
+            return secondaryLabel(entry.isDirectory ? "\u{2014}" : Formatters.bytes(entry.uncompressedSize))
 
         case "compressed":
-            return secondaryLabel(
-                entry.isDirectory ? "\u{2014}" : Formatters.bytes(entry.compressedSize)
-            )
+            return secondaryLabel(entry.isDirectory ? "\u{2014}" : Formatters.bytes(entry.compressedSize))
 
         case "modified":
             return secondaryLabel(Formatters.date(entry.modified))
@@ -226,19 +190,15 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         }
     }
 
-    // MARK: Delegate
-
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard let table = notification.object as? NSTableView else { return }
         let idx = table.selectedRow
-        if idx >= 0 && idx < entries.count {
+        if idx >= 0, idx < entries.count {
             document?.focused = entries[idx].id
         } else {
             document?.focused = nil
         }
     }
-
-    // MARK: Actions
 
     @objc func rowDoubleClicked(_ sender: NSTableView) {
         let row = sender.clickedRow
@@ -255,8 +215,6 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         document?.toggleChecked(entries[row].id)
     }
 
-    // MARK: Cell builders
-
     private func makeNameCell() -> NSTableCellView {
         let cell = NSTableCellView()
 
@@ -269,7 +227,6 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         let textField = NSTextField(labelWithString: "")
         textField.translatesAutoresizingMaskIntoConstraints = false
         textField.lineBreakMode = .byTruncatingMiddle
-        textField.cell?.truncatesLastVisibleLine = true
         cell.textField = textField
         cell.addSubview(textField)
 
