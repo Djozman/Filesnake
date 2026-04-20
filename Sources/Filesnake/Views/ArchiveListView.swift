@@ -182,19 +182,19 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         case "size":
             if entry.isDirectory {
                 let total = document?.folderSize(for: entry) ?? 0
-                return secondaryLabel(total > 0 ? Formatters.bytes(total) : "\u{2014}")
+                return centeredCell(total > 0 ? Formatters.bytes(total) : "\u{2014}", id: "SizeCell")
             }
-            return secondaryLabel(Formatters.bytes(entry.uncompressedSize))
+            return centeredCell(Formatters.bytes(entry.uncompressedSize), id: "SizeCell")
 
         case "compressed":
             if entry.isDirectory {
                 let total = document?.folderCompressedSize(for: entry) ?? 0
-                return secondaryLabel(total > 0 ? Formatters.bytes(total) : "\u{2014}")
+                return centeredCell(total > 0 ? Formatters.bytes(total) : "\u{2014}", id: "CompCell")
             }
-            return secondaryLabel(Formatters.bytes(entry.compressedSize))
+            return centeredCell(Formatters.bytes(entry.compressedSize), id: "CompCell")
 
         case "modified":
-            return secondaryLabel(Formatters.date(entry.modified))
+            return centeredCell(Formatters.date(entry.modified), id: "ModCell")
 
         default:
             return nil
@@ -378,11 +378,24 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         return cell
     }
 
-    private func secondaryLabel(_ text: String) -> NSTextField {
-        let f = NSTextField(labelWithString: text)
-        f.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        f.textColor = .secondaryLabelColor
-        f.lineBreakMode = .byTruncatingTail
-        return f
+    /// Returns an NSTableCellView with the text field centered horizontally and vertically.
+    private func centeredCell(_ text: String, id: String) -> NSTableCellView {
+        let cellID = NSUserInterfaceItemIdentifier(id)
+        let cell = NSTableCellView()
+        cell.identifier = cellID
+        let tf = NSTextField(labelWithString: text)
+        tf.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        tf.textColor = .secondaryLabelColor
+        tf.lineBreakMode = .byTruncatingTail
+        tf.alignment = .center
+        tf.translatesAutoresizingMaskIntoConstraints = false
+        cell.textField = tf
+        cell.addSubview(tf)
+        NSLayoutConstraint.activate([
+            tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            tf.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+            tf.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
+        return cell
     }
 }

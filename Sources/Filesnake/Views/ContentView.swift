@@ -68,8 +68,13 @@ private final class InvisibleSplitView: NSSplitView {
 
     private func dividerIndex(at point: NSPoint) -> Int? {
         let dT = dividerThickness
-        for i in 0..<(arrangedSubviews.count - 1) {
-            let maxX = arrangedSubviews[i].frame.maxX
+        let subs = arrangedSubviews
+        for i in 0..<(subs.count - 1) {
+            // Skip collapsed panes — their frame width is 0 and
+            // their maxX sits at 0 (or the previous pane edge),
+            // which would eat every click near the left edge.
+            if isSubviewCollapsed(subs[i]) { continue }
+            let maxX = subs[i].frame.maxX
             let lo = maxX - hotZone
             let hi = maxX + dT + hotZone
             if isVertical {
@@ -87,11 +92,6 @@ private final class InvisibleSplitView: NSSplitView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if dividerIndex(at: point) != nil {
-            super.mouseDown(with: event)
-            return
-        }
         super.mouseDown(with: event)
     }
 
