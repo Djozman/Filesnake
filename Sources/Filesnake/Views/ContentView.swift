@@ -7,17 +7,24 @@ struct ContentView: View {
     @State private var sidebarVisible = true
 
     var body: some View {
-        ThreePaneSplit(
-            left: SidebarView().environmentObject(document),
-            center: VStack(spacing: 0) {
-                if document.archiveURL != nil {
-                    FolderBreadcrumbBar().environmentObject(document)
-                }
-                ArchiveListView().environmentObject(document)
-            },
-            right: PreviewPane().environmentObject(document),
-            sidebarVisible: $sidebarVisible
-        )
+        VStack(spacing: 0) {
+            ThreePaneSplit(
+                left: SidebarView().environmentObject(document),
+                center: VStack(spacing: 0) {
+                    if document.archiveURL != nil {
+                        FolderBreadcrumbBar().environmentObject(document)
+                    }
+                    ArchiveListView().environmentObject(document)
+                },
+                right: PreviewPane().environmentObject(document),
+                sidebarVisible: $sidebarVisible
+            )
+            if document.isBusy {
+                StatusBar(text: "Working\u{2026}", busy: true)
+            } else if document.archiveURL != nil {
+                StatusBar(text: statusText, busy: false)
+            }
+        }
         .toolbar {
             ArchiveToolbar(sidebarVisible: $sidebarVisible)
         }
@@ -34,13 +41,6 @@ struct ContentView: View {
         }
         .overlay {
             if isDragTargeted { DropHighlightOverlay() }
-        }
-        .overlay(alignment: .bottom) {
-            if document.isBusy {
-                StatusBar(text: "Working\u{2026}")
-            } else if document.archiveURL != nil {
-                StatusBar(text: statusText)
-            }
         }
         .onDrop(of: [.fileURL], isTargeted: $isDragTargeted) { providers in
             guard let provider = providers.first else { return false }
@@ -81,14 +81,14 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         split.isVertical = true
         split.dividerStyle = .thin
         split.delegate = context.coordinator
-        split.translatesAutoresizingMaskIntoConstraints = false
+        split.autoresizingMask = [.width, .height]
 
         let leftHost   = NSHostingView(rootView: left)
         let centerHost = NSHostingView(rootView: center)
         let rightHost  = NSHostingView(rootView: right)
 
         [leftHost, centerHost, rightHost].forEach {
-            $0.translatesAutoresizingMaskIntoConstraints = false
+            $0.autoresizingMask = [.width, .height]
             split.addArrangedSubview($0)
         }
 
@@ -247,15 +247,24 @@ struct DropHighlightOverlay: View {
     }
 }
 
-// MARK: - Status bar
+// MARK: - Status bar (real row, not overlay; won't crop preview scrollbars)
 
 struct StatusBar: View {
     let text: String
+    let busy: Bool
     var body: some View {
-        HStack {
-            Text(text).font(.caption).foregroundStyle(.secondary)
-            Spacer()
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 8) {
+                if busy {
+                    ProgressView().scaleEffect(0.55).frame(width: 14, height: 14)
+                }
+                Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 22)
+            .background(.bar)
         }
-        .padding(.horizontal, 12).padding(.vertical, 6).background(.bar)
     }
 }

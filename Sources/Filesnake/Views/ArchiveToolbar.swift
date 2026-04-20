@@ -10,7 +10,7 @@ struct ArchiveToolbar: ToolbarContent {
             Button {
                 sidebarVisible.toggle()
             } label: {
-                Label("Toggle Sidebar", systemImage: "sidebar.left")
+                Image(systemName: "sidebar.left")
             }
             .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
         }
