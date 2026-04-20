@@ -1,15 +1,11 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Root layout
-
 struct ContentView: View {
     @EnvironmentObject var document: ArchiveDocument
     @State private var isDragTargeted = false
 
     var body: some View {
-        // FilesnakeSplitView is an NSSplitView subclass that overrides
-        // resetCursorRects to always show the resize cursor on dividers.
         FilesnakeSplitHost {
             SidebarView()
                 .environmentObject(document)
@@ -75,22 +71,18 @@ struct ContentView: View {
 
 // MARK: - NSSplitView subclass with permanent resize cursor
 
-/// Subclass that overrides resetCursorRects so the left-right resize
-/// cursor always appears on dividers, even after window resizes.
 final class FilesnakeSplitView: NSSplitView {
     override func resetCursorRects() {
         super.resetCursorRects()
-        // Add resize cursor rect for each divider
+        // Use a local name to avoid collision with the inherited method dividerRect(ofDividerAt:)
         for i in 0 ..< arrangedSubviews.count - 1 {
-            let dividerRect = dividerRect(ofDividerAt: i)
-            addCursorRect(dividerRect, cursor: .resizeLeftRight)
+            let rect = self.dividerRect(ofDividerAt: i)
+            addCursorRect(rect, cursor: .resizeLeftRight)
         }
     }
 }
 
-// MARK: - NSViewRepresentable host for FilesnakeSplitView
-// We use NSViewRepresentable so we can insert our NSSplitView subclass
-// directly, bypassing SwiftUI's HSplitView wrapper that intercepts cursor rects.
+// MARK: - NSViewRepresentable host
 
 private struct FilesnakeSplitHost<L: View, C: View, T: View>: NSViewRepresentable {
     @ViewBuilder var leading: () -> L
@@ -102,26 +94,20 @@ private struct FilesnakeSplitHost<L: View, C: View, T: View>: NSViewRepresentabl
         split.isVertical = true
         split.dividerStyle = .thin
 
-        // Wrap each SwiftUI pane in NSHostingView + container
-        let leadingView  = makePane(leading())
-        let centerView   = makePane(center())
-        let trailingView = makePane(trailing())
-
-        split.addArrangedSubview(leadingView)
-        split.addArrangedSubview(centerView)
-        split.addArrangedSubview(trailingView)
+        split.addArrangedSubview(makePane(leading()))
+        split.addArrangedSubview(makePane(center()))
+        split.addArrangedSubview(makePane(trailing()))
 
         DispatchQueue.main.async {
             let w = split.bounds.width
             guard w > 0 else { return }
-            split.setPosition(220,       ofDividerAt: 0)
-            split.setPosition(w - 280,   ofDividerAt: 1)
+            split.setPosition(220,     ofDividerAt: 0)
+            split.setPosition(w - 280, ofDividerAt: 1)
         }
         return split
     }
 
     func updateNSView(_ splitView: FilesnakeSplitView, context: Context) {
-        // Trigger cursor rect refresh on any update
         splitView.window?.invalidateCursorRects(for: splitView)
     }
 
@@ -176,8 +162,10 @@ struct DropHighlightOverlay: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Color.accentColor, lineWidth: 3).padding(4)
             VStack(spacing: 8) {
-                Image(systemName: "archivebox").font(.system(size: 32, weight: .light)).foregroundStyle(Color.accentColor)
-                Text("Release to Open Archive").font(.system(size: 17, weight: .semibold)).foregroundStyle(Color.accentColor)
+                Image(systemName: "archivebox")
+                    .font(.system(size: 32, weight: .light)).foregroundStyle(Color.accentColor)
+                Text("Release to Open Archive")
+                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(Color.accentColor)
             }
         }
         .ignoresSafeArea().allowsHitTesting(false)
