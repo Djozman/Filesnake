@@ -22,10 +22,29 @@ final class NonFocusableScrollView: NSScrollView {
 final class FilesnakeTableView: NSTableView {
     override var acceptsFirstResponder: Bool { false }
     override func becomeFirstResponder() -> Bool { false }
+    override func mouseDown(with event: NSEvent) { super.mouseDown(with: event) }
+}
 
-    override func mouseDown(with event: NSEvent) {
-        super.mouseDown(with: event)
+// MARK: - Centered cell view (reusable)
+
+final class CenteredTableCellView: NSTableCellView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        let tf = NSTextField(labelWithString: "")
+        tf.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        tf.textColor = .secondaryLabelColor
+        tf.lineBreakMode = .byTruncatingTail
+        tf.alignment = .center
+        tf.translatesAutoresizingMaskIntoConstraints = false
+        textField = tf
+        addSubview(tf)
+        NSLayoutConstraint.activate([
+            tf.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tf.trailingAnchor.constraint(equalTo: trailingAnchor),
+            tf.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
     }
+    required init?(coder: NSCoder) { fatalError() }
 }
 
 // MARK: - NSViewRepresentable
@@ -63,16 +82,19 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         let sizeCol = NSTableColumn(identifier: .init("size"))
         sizeCol.title = "Size"; sizeCol.width = 80; sizeCol.minWidth = 60; sizeCol.maxWidth = 140
         sizeCol.isEditable = false
+        sizeCol.headerCell.alignment = .center
         table.addTableColumn(sizeCol)
 
         let compCol = NSTableColumn(identifier: .init("compressed"))
         compCol.title = "Compressed"; compCol.width = 90; compCol.minWidth = 70; compCol.maxWidth = 140
         compCol.isEditable = false
+        compCol.headerCell.alignment = .center
         table.addTableColumn(compCol)
 
         let modCol = NSTableColumn(identifier: .init("modified"))
         modCol.title = "Modified"; modCol.width = 140; modCol.minWidth = 100; modCol.maxWidth = 200
         modCol.isEditable = false
+        modCol.headerCell.alignment = .center
         table.addTableColumn(modCol)
 
         context.coordinator.table = table
@@ -180,21 +202,27 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             return cell
 
         case "size":
+            let text: String
             if entry.isDirectory {
                 let total = document?.folderSize(for: entry) ?? 0
-                return centeredCell(total > 0 ? Formatters.bytes(total) : "\u{2014}", id: "SizeCell")
+                text = total > 0 ? Formatters.bytes(total) : "\u{2014}"
+            } else {
+                text = Formatters.bytes(entry.uncompressedSize)
             }
-            return centeredCell(Formatters.bytes(entry.uncompressedSize), id: "SizeCell")
+            return centeredCell(text, id: "SizeCell", in: tableView)
 
         case "compressed":
+            let text: String
             if entry.isDirectory {
                 let total = document?.folderCompressedSize(for: entry) ?? 0
-                return centeredCell(total > 0 ? Formatters.bytes(total) : "\u{2014}", id: "CompCell")
+                text = total > 0 ? Formatters.bytes(total) : "\u{2014}"
+            } else {
+                text = Formatters.bytes(entry.compressedSize)
             }
-            return centeredCell(Formatters.bytes(entry.compressedSize), id: "CompCell")
+            return centeredCell(text, id: "CompCell", in: tableView)
 
         case "modified":
-            return centeredCell(Formatters.date(entry.modified), id: "ModCell")
+            return centeredCell(Formatters.date(entry.modified), id: "ModCell", in: tableView)
 
         default:
             return nil
@@ -378,24 +406,16 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         return cell
     }
 
-    /// Returns an NSTableCellView with the text field centered horizontally and vertically.
-    private func centeredCell(_ text: String, id: String) -> NSTableCellView {
+    private func centeredCell(_ text: String, id: String, in tableView: NSTableView) -> NSTableCellView {
         let cellID = NSUserInterfaceItemIdentifier(id)
-        let cell = NSTableCellView()
-        cell.identifier = cellID
-        let tf = NSTextField(labelWithString: text)
-        tf.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        tf.textColor = .secondaryLabelColor
-        tf.lineBreakMode = .byTruncatingTail
-        tf.alignment = .center
-        tf.translatesAutoresizingMaskIntoConstraints = false
-        cell.textField = tf
-        cell.addSubview(tf)
-        NSLayoutConstraint.activate([
-            tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            tf.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
-            tf.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
+        let cell: CenteredTableCellView
+        if let reused = tableView.makeView(withIdentifier: cellID, owner: nil) as? CenteredTableCellView {
+            cell = reused
+        } else {
+            cell = CenteredTableCellView()
+            cell.identifier = cellID
+        }
+        cell.textField?.stringValue = text
         return cell
     }
 }
