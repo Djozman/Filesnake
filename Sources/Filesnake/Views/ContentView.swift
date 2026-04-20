@@ -11,9 +11,15 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260)
         } content: {
             VStack(spacing: 0) {
-                // Search bar — plain TextField, always visible when archive is open
                 if document.archiveURL != nil {
+                    // Native NSSearchField — immune to NSTableView responder theft
                     SearchBarView(text: $document.searchText)
+                        .frame(height: 28)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.bar)
+                        .overlay(alignment: .bottom) { Divider() }
+
                     FolderBreadcrumbBar()
                 }
                 ArchiveListView()
@@ -31,7 +37,6 @@ struct ContentView: View {
         } message: {
             Text(document.lastError ?? "")
         }
-        // Drop overlay — handled here so it covers the entire window
         .overlay {
             if document.archiveURL == nil && !isDragTargeted {
                 EmptyStateView()
@@ -49,7 +54,6 @@ struct ContentView: View {
                 StatusBar(text: statusText)
             }
         }
-        // Drag-and-drop: intercept at the window level
         .onDrop(of: [.fileURL], isTargeted: $isDragTargeted) { providers in
             guard let provider = providers.first else { return false }
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -67,37 +71,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Search bar
-
-struct SearchBarView: View {
-    @Binding var text: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .font(.system(size: 13))
-            TextField("Search files in archive", text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-            if !text.isEmpty {
-                Button {
-                    text = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(.bar)
-        .overlay(alignment: .bottom) { Divider() }
-    }
-}
-
-// MARK: - Drop highlight overlay
+// MARK: - Drop highlight
 
 struct DropHighlightOverlay: View {
     var body: some View {
@@ -122,7 +96,7 @@ struct DropHighlightOverlay: View {
 
 // MARK: - Breadcrumb bar
 
-private struct FolderBreadcrumbBar: View {
+struct FolderBreadcrumbBar: View {
     @EnvironmentObject var document: ArchiveDocument
 
     var body: some View {
@@ -160,7 +134,7 @@ private struct FolderBreadcrumbBar: View {
 
 // MARK: - Status bar
 
-private struct StatusBar: View {
+struct StatusBar: View {
     let text: String
     var body: some View {
         HStack {
