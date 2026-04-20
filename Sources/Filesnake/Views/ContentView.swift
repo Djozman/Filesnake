@@ -67,12 +67,19 @@ private final class InvisibleSplitView: NSSplitView {
     /// Intercept hits inside any divider rect so QL/text subviews
     /// cannot steal the mouse drag that should resize the pane.
     override func hitTest(_ point: NSPoint) -> NSView? {
-        for i in 0..<(arrangedSubviews.count - 1) {
-            let divRect = dividerRect(ofDividerAt: i)
-            // Expand the hot-zone by 2pt each side so it's easier to grab.
-            let expanded = divRect.insetBy(dx: isVertical ? -2 : 0,
-                                           dy: isVertical ? 0 : -2)
-            if expanded.contains(point) { return self }
+        let subs = arrangedSubviews
+        let dT   = dividerThickness
+        let hot: CGFloat = 3 // expand hit zone each side
+        for i in 0..<(subs.count - 1) {
+            let subMaxX = subs[i].frame.maxX
+            // Divider occupies [subMaxX, subMaxX + dT]; expand by `hot` pt each side.
+            let divMin = subMaxX - hot
+            let divMax = subMaxX + dT + hot
+            if isVertical {
+                if point.x >= divMin && point.x <= divMax { return self }
+            } else {
+                if point.y >= divMin && point.y <= divMax { return self }
+            }
         }
         return super.hitTest(point)
     }
