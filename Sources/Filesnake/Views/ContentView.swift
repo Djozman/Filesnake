@@ -6,26 +6,16 @@ struct ContentView: View {
     @State private var isDragTargeted = false
 
     var body: some View {
-        HSplitView {
-            SidebarView()
-                .environmentObject(document)
-                .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
-
-            VStack(spacing: 0) {
+        ThreePaneSplit(
+            left: SidebarView().environmentObject(document),
+            center: VStack(spacing: 0) {
                 if document.archiveURL != nil {
-                    FolderBreadcrumbBar()
-                        .environmentObject(document)
+                    FolderBreadcrumbBar().environmentObject(document)
                 }
-                ArchiveListView()
-                    .environmentObject(document)
-            }
-            .frame(minWidth: 340, idealWidth: 500)
-
-            PreviewPane()
-                .environmentObject(document)
-                .frame(minWidth: 200, idealWidth: 280)
-        }
-        .background(DividerCursorTracker())
+                ArchiveListView().environmentObject(document)
+            },
+            right: PreviewPane().environmentObject(document)
+        )
         .toolbar { ArchiveToolbar() }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
@@ -64,65 +54,115 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Divider cursor tracker
+// MARK: - NSSplitView-backed three-pane layout
 
-private struct DividerCursorTracker: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let v = TrackerView()
-        DispatchQueue.main.async { v.install() }
-        return v
-    }
-    func updateNSView(_ v: NSView, context: Context) {}
-}
+struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
+    let left: L
+    let center: C
+    let right: R
 
-private final class TrackerView: NSView {
-    private var cursorPushed = false
+    static var sidebarMin: CGFloat { 180 }
+    static var sidebarMax: CGFloat { 340 }
+    static var centerMin: CGFloat  { 340 }
+    static var previewMin: CGFloat { 220 }
+    static var previewMax: CGFloat { 480 }
+    static var initialSidebar: CGFloat { 220 }
+    static var initialPreview: CGFloat { 300 }
 
-    func install() {
-        guard let contentView = window?.contentView else { return }
-        let area = NSTrackingArea(
-            rect: .zero,
-            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        contentView.addTrackingArea(area)
-    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
-    override func mouseMoved(with event: NSEvent) {
-        guard let contentView = window?.contentView else { return }
-        let loc = contentView.convert(event.locationInWindow, from: nil)
-        let over = isOverDivider(loc, in: contentView)
-        if over && !cursorPushed {
-            NSCursor.resizeLeftRight.push()
-            cursorPushed = true
-        } else if !over && cursorPushed {
-            NSCursor.pop()
-            cursorPushed = false
+    func makeNSView(context: Context) -> NSSplitView {
+        let split = NSSplitView()
+        split.isVertical = true
+        split.dividerStyle = .thin
+        split.delegate = context.coordinator
+        split.translatesAutoresizingMaskIntoConstraints = false
+
+        let leftHost   = NSHostingView(rootView: left)
+        let centerHost = NSHostingView(rootView: center)
+        let rightHost  = NSHostingView(rootView: right)
+
+        [leftHost, centerHost, rightHost].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            split.addArrangedSubview($0)
         }
+
+        // When the window resizes: center yields first; sidebar + preview keep their size.
+        split.setHoldingPriority(NSLayoutConstraint.Priority(260), forSubviewAt: 0)
+        split.setHoldingPriority(NSLayoutConstraint.Priority(240), forSubviewAt: 1)
+        split.setHoldingPriority(NSLayoutConstraint.Priority(260), forSubviewAt: 2)
+
+        context.coordinator.split = split
+        context.coordinator.leftHost = leftHost
+        context.coordinator.centerHost = centerHost
+        context.coordinator.rightHost = rightHost
+
+        // Initial divider positions (once the split has a real width).
+        DispatchQueue.main.async {
+            let w = split.bounds.width
+            guard w > 0 else { return }
+            split.setPosition(Self.initialSidebar, ofDividerAt: 0)
+            split.setPosition(w - Self.initialPreview, ofDividerAt: 1)
+        }
+        return split
     }
 
-    override func mouseExited(with event: NSEvent) {
-        if cursorPushed { NSCursor.pop(); cursorPushed = false }
+    func updateNSView(_ split: NSSplitView, context: Context) {
+        context.coordinator.leftHost?.rootView   = left
+        context.coordinator.centerHost?.rootView = center
+        context.coordinator.rightHost?.rootView  = right
     }
 
-    private func isOverDivider(_ point: NSPoint, in root: NSView) -> Bool {
-        func check(_ view: NSView) -> Bool {
-            if let sv = view as? NSSplitView, sv.isVertical {
-                let p = sv.convert(point, from: root)
-                let views = sv.arrangedSubviews
-                for i in 0 ..< views.count - 1 {
-                    let strip = NSRect(
-                        x: views[i].frame.maxX, y: 0,
-                        width: max(views[i+1].frame.minX - views[i].frame.maxX, sv.dividerThickness),
-                        height: sv.bounds.height
-                    )
-                    if strip.contains(p) { return true }
-                }
+    @MainActor
+    final class Coordinator: NSObject, NSSplitViewDelegate {
+        weak var split: NSSplitView?
+        var leftHost: NSHostingView<L>?
+        var centerHost: NSHostingView<C>?
+        var rightHost: NSHostingView<R>?
+
+        func splitView(_ splitView: NSSplitView,
+                       constrainMinCoordinate proposedMin: CGFloat,
+                       ofSubviewAt dividerIndex: Int) -> CGFloat {
+            switch dividerIndex {
+            case 0: return ThreePaneSplit.sidebarMin
+            case 1:
+                let leftEdge = splitView.arrangedSubviews[0].frame.maxX + splitView.dividerThickness
+                return leftEdge + ThreePaneSplit.centerMin
+            default: return proposedMin
             }
-            return view.subviews.contains { check($0) }
         }
-        return check(root)
+
+        func splitView(_ splitView: NSSplitView,
+                       constrainMaxCoordinate proposedMax: CGFloat,
+                       ofSubviewAt dividerIndex: Int) -> CGFloat {
+            switch dividerIndex {
+            case 0: return ThreePaneSplit.sidebarMax
+            case 1:
+                let previewMin = splitView.bounds.width - ThreePaneSplit.previewMax
+                let previewMaxConstraint = splitView.bounds.width - ThreePaneSplit.previewMin
+                return min(previewMaxConstraint, max(previewMin, proposedMax))
+            default: return proposedMax
+            }
+        }
+
+        // Keep sidebar + preview fixed when the window resizes; center absorbs the delta.
+        func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
+            let subs = splitView.arrangedSubviews
+            guard subs.count == 3 else {
+                splitView.adjustSubviews(); return
+            }
+            let total = splitView.bounds.width
+            let dT = splitView.dividerThickness
+            let leftW  = max(ThreePaneSplit.sidebarMin,
+                             min(ThreePaneSplit.sidebarMax, subs[0].frame.width))
+            let rightW = max(ThreePaneSplit.previewMin,
+                             min(ThreePaneSplit.previewMax, subs[2].frame.width))
+            let centerW = max(ThreePaneSplit.centerMin, total - leftW - rightW - 2 * dT)
+            let height = splitView.bounds.height
+            subs[0].frame = NSRect(x: 0, y: 0, width: leftW, height: height)
+            subs[1].frame = NSRect(x: leftW + dT, y: 0, width: centerW, height: height)
+            subs[2].frame = NSRect(x: leftW + centerW + 2 * dT, y: 0, width: rightW, height: height)
+        }
     }
 }
 

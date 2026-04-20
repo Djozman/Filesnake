@@ -9,6 +9,7 @@ struct ArchiveToolbar: ToolbarContent {
         // regardless of window size, exactly like Finder's search box.
         ToolbarItem(placement: .principal) {
             ToolbarSearchField(text: $document.searchText)
+                .fixedSize()
                 .disabled(document.archiveURL == nil)
                 .opacity(document.archiveURL == nil ? 0.4 : 1)
         }

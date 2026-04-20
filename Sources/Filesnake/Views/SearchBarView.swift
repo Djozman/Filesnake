@@ -1,8 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// A native NSSearchField wrapped for SwiftUI.
-/// Binds directly to a String — no NavigationStack or .searchable needed.
+/// Native NSSearchField wrapped for SwiftUI. Binds directly to a String.
 struct ToolbarSearchField: NSViewRepresentable {
     @Binding var text: String
 
@@ -14,17 +13,29 @@ struct ToolbarSearchField: NSViewRepresentable {
         field.sendsSearchStringImmediately = true
         field.sendsWholeSearchString = false
         field.delegate = context.coordinator
-        // Give it a comfortable fixed width inside the toolbar
-        field.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        field.controlSize = .regular
+        field.font = .systemFont(ofSize: NSFont.systemFontSize(for: .regular))
+        field.cell?.usesSingleLineMode = true
+        field.cell?.lineBreakMode = .byTruncatingTail
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        // Pin height so the toolbar doesn't stretch the control vertically,
+        // which is what pushes the text baseline off-center.
+        field.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        field.setContentHuggingPriority(.required, for: .vertical)
+        field.setContentCompressionResistancePriority(.required, for: .vertical)
         return field
     }
 
     func updateNSView(_ field: NSSearchField, context: Context) {
+        // Don't yank text from under the user while they're typing.
+        guard field.currentEditor() == nil else { return }
         if field.stringValue != text {
             field.stringValue = text
         }
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         @Binding var text: String
         init(text: Binding<String>) { _text = text }
