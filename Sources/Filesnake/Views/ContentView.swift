@@ -31,9 +31,8 @@ struct ContentView: View {
                 .environmentObject(document)
                 .frame(minWidth: 200, idealWidth: 280)
         }
-        // Resize cursor on the two dividers via a transparent overlay
         .background(SplitViewCursorInstaller())
-        .toolbar { ArchiveToolbar().environmentObject(document) }
+        .toolbar { ArchiveToolbar() }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
             set: { if !$0 { document.lastError = nil } }
@@ -72,9 +71,6 @@ struct ContentView: View {
 }
 
 // MARK: - Resize cursor installer
-// Walks the view hierarchy once to find the NSSplitView inside HSplitView
-// and calls resetCursorRects / invalidateCursorRects so macOS shows the
-// left-right resize arrow on the dividers.
 
 private struct SplitViewCursorInstaller: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
@@ -82,9 +78,7 @@ private struct SplitViewCursorInstaller: NSViewRepresentable {
         DispatchQueue.main.async {
             func findSplitView(_ view: NSView) -> NSSplitView? {
                 if let sv = view as? NSSplitView { return sv }
-                for sub in view.subviews {
-                    if let found = findSplitView(sub) { return found }
-                }
+                for sub in view.subviews { if let f = findSplitView(sub) { return f } }
                 return nil
             }
             if let sv = findSplitView(v.window?.contentView ?? v) {
