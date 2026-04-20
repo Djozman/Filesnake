@@ -58,11 +58,15 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Invisible NSSplitView that always owns its divider rects
+// MARK: - NSSplitView with visible divider and reliable cursor/hit-test
 
 private final class InvisibleSplitView: NSSplitView {
-    override func drawDivider(in rect: NSRect) {}
     override var dividerThickness: CGFloat { 1 }
+
+    override func drawDivider(in rect: NSRect) {
+        NSColor.separatorColor.setFill()
+        rect.fill()
+    }
 
     private let hotZone: CGFloat = 4
 
@@ -70,9 +74,6 @@ private final class InvisibleSplitView: NSSplitView {
         let dT = dividerThickness
         let subs = arrangedSubviews
         for i in 0..<(subs.count - 1) {
-            // Skip collapsed panes — their frame width is 0 and
-            // their maxX sits at 0 (or the previous pane edge),
-            // which would eat every click near the left edge.
             if isSubviewCollapsed(subs[i]) { continue }
             let maxX = subs[i].frame.maxX
             let lo = maxX - hotZone
@@ -89,6 +90,23 @@ private final class InvisibleSplitView: NSSplitView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         if dividerIndex(at: point) != nil { return self }
         return super.hitTest(point)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        let subs = arrangedSubviews
+        let dT = dividerThickness
+        for i in 0..<(subs.count - 1) {
+            if isSubviewCollapsed(subs[i]) { continue }
+            let maxX = subs[i].frame.maxX
+            let zoneRect = NSRect(
+                x: maxX - hotZone,
+                y: 0,
+                width: dT + hotZone * 2,
+                height: bounds.height
+            )
+            addCursorRect(zoneRect, cursor: .resizeLeftRight)
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
