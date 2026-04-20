@@ -58,6 +58,15 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Invisible NSSplitView (no divider lines)
+
+private final class InvisibleSplitView: NSSplitView {
+    override func drawDivider(in rect: NSRect) {
+        // Draw nothing — dividers are invisible, like Finder.
+    }
+    override var dividerThickness: CGFloat { 1 }
+}
+
 // MARK: - NSSplitView three-pane layout
 
 struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
@@ -77,7 +86,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSSplitView {
-        let split = NSSplitView()
+        let split = InvisibleSplitView()
         split.isVertical = true
         split.dividerStyle = .thin
         split.delegate = context.coordinator
@@ -127,8 +136,6 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         var centerHost: NSHostingView<C>?
         var rightHost:  NSHostingView<R>?
 
-        // MARK: Constraints — NSSplitView calls these during drag; no manual frame overrides needed.
-
         func splitView(_ splitView: NSSplitView,
                        constrainMinCoordinate proposedMin: CGFloat,
                        ofSubviewAt dividerIndex: Int) -> CGFloat {
@@ -138,7 +145,6 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             case 0:
                 return Self.sidebarMin
             case 1:
-                // Left edge of divider 1 must leave enough room for the center
                 let leftEdge = splitView.isSubviewCollapsed(subs[0]) ? 0 : subs[0].frame.maxX + dT
                 return leftEdge + Self.centerMin
             default:
@@ -153,14 +159,11 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             case 0:
                 return Self.sidebarMax
             case 1:
-                // Right edge of divider 1 must leave enough room for the preview
                 return splitView.bounds.width - Self.previewMin
             default:
                 return proposedMax
             }
         }
-
-        // MARK: Window resize — keep panels in bounds
 
         func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
             let subs          = splitView.arrangedSubviews
@@ -177,8 +180,8 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             if !leftCollapsed {
                 subs[0].frame = NSRect(x: 0, y: 0, width: leftW, height: h)
             }
-            subs[1].frame = NSRect(x: leftOffset,             y: 0, width: centerW, height: h)
-            subs[2].frame = NSRect(x: leftOffset + centerW + dT, y: 0, width: rightW,  height: h)
+            subs[1].frame = NSRect(x: leftOffset,                 y: 0, width: centerW, height: h)
+            subs[2].frame = NSRect(x: leftOffset + centerW + dT,  y: 0, width: rightW,  height: h)
         }
 
         func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
