@@ -41,23 +41,18 @@ struct SearchBarView: NSViewRepresentable {
         func installKeyMonitor(for field: FocusableSearchField) {
             self.field = field
             if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
-
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self, weak field] event in
                 guard let self, let field, let window = field.window else { return event }
-                // Skip if already focused
-                let editor = field.currentEditor()
-                let alreadyFocused = window.firstResponder === editor || window.firstResponder === field
+                let alreadyFocused = window.firstResponder === field.currentEditor()
+                    || window.firstResponder === field
                 guard !alreadyFocused else { return event }
-                // Only printable, no cmd/ctrl/option
                 let mods = event.modifierFlags.intersection([.command, .control, .option])
                 guard mods.isEmpty,
                       let chars = event.charactersIgnoringModifiers,
                       !chars.isEmpty,
                       chars.unicodeScalars.first.map({ $0.value >= 32 }) == true
                 else { return event }
-
                 window.makeFirstResponder(field)
-                // insertText(_:) is the correct NSText signature
                 field.currentEditor()?.insertText(chars)
                 self.text = field.stringValue
                 return nil

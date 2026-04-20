@@ -6,11 +6,11 @@ struct ContentView: View {
     @State private var isDragTargeted = false
 
     var body: some View {
-        FilesnakeSplitHost {
+        HSplitView {
             SidebarView()
                 .environmentObject(document)
                 .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
-        } center: {
+
             VStack(spacing: 0) {
                 if document.archiveURL != nil {
                     SearchBarView(text: $document.searchText)
@@ -26,11 +26,16 @@ struct ContentView: View {
                     .environmentObject(document)
             }
             .frame(minWidth: 340, idealWidth: 500)
-        } trailing: {
+
             PreviewPane()
                 .environmentObject(document)
                 .frame(minWidth: 200, idealWidth: 280)
         }
+        // DividerCursorTracker installs a window-level NSTrackingArea.
+        // It detects mouse position and pushes NSCursor.resizeLeftRight
+        // when hovering over any NSSplitView divider in the window,
+        // regardless of what SwiftUI layers sit on top.
+        .background(DividerCursorTracker())
         .toolbar { ArchiveToolbar() }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
@@ -69,65 +74,76 @@ struct ContentView: View {
     }
 }
 
-// MARK: - NSSplitView subclass with permanent resize cursor
+// MARK: - Divider cursor tracker
+//
+// HSplitView's SwiftUI hit-test layer intercepts cursor rects, so
+// NSSplitView.resetCursorRects never gets to show the resize cursor.
+// Instead we install one NSTrackingArea on the window's contentView
+// covering the whole window, then on every mouseMoved event we check
+// if the mouse is over an NSSplitView divider strip and push/pop the
+// resize cursor manually via the NSCursor stack.
 
-final class FilesnakeSplitView: NSSplitView {
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        // NSSplitView has no public API to get a divider rect by index.
-        // The divider sits between subview[i].maxX and subview[i+1].minX.
-        // We compute it manually and register the resize cursor on that strip.
-        let views = arrangedSubviews
-        for i in 0 ..< views.count - 1 {
-            let left  = views[i].frame.maxX
-            let right = views[i + 1].frame.minX
-            let divRect = NSRect(x: left, y: 0, width: max(right - left, dividerThickness), height: bounds.height)
-            addCursorRect(divRect, cursor: .resizeLeftRight)
-        }
+private struct DividerCursorTracker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = TrackerView()
+        DispatchQueue.main.async { v.install() }
+        return v
     }
+    func updateNSView(_ v: NSView, context: Context) {}
 }
 
-// MARK: - NSViewRepresentable host
+private final class TrackerView: NSView {
+    private var trackingArea: NSTrackingArea?
+    private var cursorPushed = false
 
-private struct FilesnakeSplitHost<L: View, C: View, T: View>: NSViewRepresentable {
-    @ViewBuilder var leading: () -> L
-    @ViewBuilder var center: () -> C
-    @ViewBuilder var trailing: () -> T
+    func install() {
+        guard let contentView = window?.contentView else { return }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        contentView.addTrackingArea(area)
+        trackingArea = area
+    }
 
-    func makeNSView(context: Context) -> FilesnakeSplitView {
-        let split = FilesnakeSplitView()
-        split.isVertical = true
-        split.dividerStyle = .thin
-
-        split.addArrangedSubview(makePane(leading()))
-        split.addArrangedSubview(makePane(center()))
-        split.addArrangedSubview(makePane(trailing()))
-
-        DispatchQueue.main.async {
-            let w = split.bounds.width
-            guard w > 0 else { return }
-            split.setPosition(220,     ofDividerAt: 0)
-            split.setPosition(w - 280, ofDividerAt: 1)
+    override func mouseMoved(with event: NSEvent) {
+        guard let contentView = window?.contentView else { return }
+        let loc = contentView.convert(event.locationInWindow, from: nil)
+        let overDivider = isOverDivider(loc, in: contentView)
+        if overDivider && !cursorPushed {
+            NSCursor.resizeLeftRight.push()
+            cursorPushed = true
+        } else if !overDivider && cursorPushed {
+            NSCursor.pop()
+            cursorPushed = false
         }
-        return split
     }
 
-    func updateNSView(_ splitView: FilesnakeSplitView, context: Context) {
-        splitView.window?.invalidateCursorRects(for: splitView)
+    override func mouseExited(with event: NSEvent) {
+        if cursorPushed { NSCursor.pop(); cursorPushed = false }
     }
 
-    private func makePane<V: View>(_ view: V) -> NSView {
-        let host = NSHostingView(rootView: view)
-        host.translatesAutoresizingMaskIntoConstraints = false
-        let container = NSView()
-        container.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            host.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            host.topAnchor.constraint(equalTo: container.topAnchor),
-            host.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-        return container
+    // Walk the view tree to find all NSSplitViews and check
+    // if `point` (in contentView coords) falls in any divider strip.
+    private func isOverDivider(_ point: NSPoint, in root: NSView) -> Bool {
+        func check(_ view: NSView) -> Bool {
+            if let sv = view as? NSSplitView, sv.isVertical {
+                let svPoint = sv.convert(point, from: root)
+                let views = sv.arrangedSubviews
+                for i in 0 ..< views.count - 1 {
+                    let maxX = views[i].frame.maxX
+                    let minX = views[i + 1].frame.minX
+                    let strip = NSRect(x: maxX, y: 0,
+                                      width: max(minX - maxX, sv.dividerThickness),
+                                      height: sv.bounds.height)
+                    if strip.contains(svPoint) { return true }
+                }
+            }
+            return view.subviews.contains { check($0) }
+        }
+        return check(root)
     }
 }
 
