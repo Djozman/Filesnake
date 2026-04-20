@@ -1,16 +1,20 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Root layout
+
 struct ContentView: View {
     @EnvironmentObject var document: ArchiveDocument
     @State private var isDragTargeted = false
 
     var body: some View {
-        HSplitView {
+        // FilesnakeSplitView is an NSSplitView subclass that overrides
+        // resetCursorRects to always show the resize cursor on dividers.
+        FilesnakeSplitHost {
             SidebarView()
                 .environmentObject(document)
                 .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
-
+        } center: {
             VStack(spacing: 0) {
                 if document.archiveURL != nil {
                     SearchBarView(text: $document.searchText)
@@ -26,12 +30,11 @@ struct ContentView: View {
                     .environmentObject(document)
             }
             .frame(minWidth: 340, idealWidth: 500)
-
+        } trailing: {
             PreviewPane()
                 .environmentObject(document)
                 .frame(minWidth: 200, idealWidth: 280)
         }
-        .background(SplitViewCursorInstaller())
         .toolbar { ArchiveToolbar() }
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
@@ -70,25 +73,71 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Resize cursor installer
+// MARK: - NSSplitView subclass with permanent resize cursor
 
-private struct SplitViewCursorInstaller: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let v = NSView()
-        DispatchQueue.main.async {
-            func findSplitView(_ view: NSView) -> NSSplitView? {
-                if let sv = view as? NSSplitView { return sv }
-                for sub in view.subviews { if let f = findSplitView(sub) { return f } }
-                return nil
-            }
-            if let sv = findSplitView(v.window?.contentView ?? v) {
-                sv.resetCursorRects()
-                sv.window?.invalidateCursorRects(for: sv)
-            }
+/// Subclass that overrides resetCursorRects so the left-right resize
+/// cursor always appears on dividers, even after window resizes.
+final class FilesnakeSplitView: NSSplitView {
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        // Add resize cursor rect for each divider
+        for i in 0 ..< arrangedSubviews.count - 1 {
+            let dividerRect = dividerRect(ofDividerAt: i)
+            addCursorRect(dividerRect, cursor: .resizeLeftRight)
         }
-        return v
     }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+// MARK: - NSViewRepresentable host for FilesnakeSplitView
+// We use NSViewRepresentable so we can insert our NSSplitView subclass
+// directly, bypassing SwiftUI's HSplitView wrapper that intercepts cursor rects.
+
+private struct FilesnakeSplitHost<L: View, C: View, T: View>: NSViewRepresentable {
+    @ViewBuilder var leading: () -> L
+    @ViewBuilder var center: () -> C
+    @ViewBuilder var trailing: () -> T
+
+    func makeNSView(context: Context) -> FilesnakeSplitView {
+        let split = FilesnakeSplitView()
+        split.isVertical = true
+        split.dividerStyle = .thin
+
+        // Wrap each SwiftUI pane in NSHostingView + container
+        let leadingView  = makePane(leading())
+        let centerView   = makePane(center())
+        let trailingView = makePane(trailing())
+
+        split.addArrangedSubview(leadingView)
+        split.addArrangedSubview(centerView)
+        split.addArrangedSubview(trailingView)
+
+        DispatchQueue.main.async {
+            let w = split.bounds.width
+            guard w > 0 else { return }
+            split.setPosition(220,       ofDividerAt: 0)
+            split.setPosition(w - 280,   ofDividerAt: 1)
+        }
+        return split
+    }
+
+    func updateNSView(_ splitView: FilesnakeSplitView, context: Context) {
+        // Trigger cursor rect refresh on any update
+        splitView.window?.invalidateCursorRects(for: splitView)
+    }
+
+    private func makePane<V: View>(_ view: V) -> NSView {
+        let host = NSHostingView(rootView: view)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        let container = NSView()
+        container.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            host.topAnchor.constraint(equalTo: container.topAnchor),
+            host.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        return container
+    }
 }
 
 // MARK: - Breadcrumb bar
@@ -99,13 +148,11 @@ struct FolderBreadcrumbBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 Button("Root") { document.goToRoot() }
-                    .buttonStyle(.link)
-                    .disabled(document.currentFolderPath.isEmpty)
+                    .buttonStyle(.link).disabled(document.currentFolderPath.isEmpty)
                 ForEach(Array(document.breadcrumbs.enumerated()), id: \.offset) { index, crumb in
                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                     Button(crumb) { document.goToBreadcrumb(index: index) }
-                        .buttonStyle(.link)
-                        .disabled(index == document.breadcrumbs.count - 1)
+                        .buttonStyle(.link).disabled(index == document.breadcrumbs.count - 1)
                 }
                 if !document.currentFolderPath.isEmpty {
                     Spacer(minLength: 12)
@@ -116,8 +163,7 @@ struct FolderBreadcrumbBar: View {
             }
             .font(.callout).padding(.horizontal, 12).padding(.vertical, 8)
         }
-        .background(.bar)
-        .overlay(alignment: .bottom) { Divider() }
+        .background(.bar).overlay(alignment: .bottom) { Divider() }
     }
 }
 
