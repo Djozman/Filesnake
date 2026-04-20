@@ -1,18 +1,25 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Root layout using HSplitView instead of NavigationSplitView.
+// NavigationSplitView's detail/content columns host QLPreviewView and NSTableView,
+// both of which steal first responder and make the search field unwritable.
+// HSplitView gives us full control: the search field is a sibling, not a descendant
+// of the focus-stealing views, and NSSplitView provides the resize cursor for free.
+
 struct ContentView: View {
     @EnvironmentObject var document: ArchiveDocument
     @State private var isDragTargeted = false
 
     var body: some View {
-        NavigationSplitView {
+        HSplitView {
+            // ── Left column: sidebar ──────────────────────────────────────────
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260)
-        } content: {
+                .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
+
+            // ── Centre column: search + breadcrumb + table ────────────────────
             VStack(spacing: 0) {
                 if document.archiveURL != nil {
-                    // Native NSSearchField — immune to NSTableView responder theft
                     SearchBarView(text: $document.searchText)
                         .frame(height: 28)
                         .padding(.horizontal, 10)
@@ -24,11 +31,14 @@ struct ContentView: View {
                 }
                 ArchiveListView()
             }
-            .navigationSplitViewColumnWidth(min: 360, ideal: 520)
-        } detail: {
+            .frame(minWidth: 340, idealWidth: 500)
+
+            // ── Right column: preview ─────────────────────────────────────────
             PreviewPane()
+                .frame(minWidth: 200, idealWidth: 280)
         }
         .toolbar { ArchiveToolbar() }
+        // Alert
         .alert("Problem", isPresented: Binding(
             get: { document.lastError != nil },
             set: { if !$0 { document.lastError = nil } }
@@ -37,6 +47,7 @@ struct ContentView: View {
         } message: {
             Text(document.lastError ?? "")
         }
+        // Empty state + drag overlay
         .overlay {
             if document.archiveURL == nil && !isDragTargeted {
                 EmptyStateView()
@@ -47,6 +58,7 @@ struct ContentView: View {
                 DropHighlightOverlay()
             }
         }
+        // Status bar
         .overlay(alignment: .bottom) {
             if document.isBusy {
                 StatusBar(text: "Working\u{2026}")
@@ -54,6 +66,7 @@ struct ContentView: View {
                 StatusBar(text: statusText)
             }
         }
+        // Drop handler
         .onDrop(of: [.fileURL], isTargeted: $isDragTargeted) { providers in
             guard let provider = providers.first else { return false }
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -71,7 +84,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Drop highlight
+// MARK: - Drop highlight overlay
 
 struct DropHighlightOverlay: View {
     var body: some View {

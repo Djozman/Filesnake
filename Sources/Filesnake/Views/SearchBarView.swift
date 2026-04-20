@@ -1,13 +1,14 @@
 import SwiftUI
 import AppKit
 
-// MARK: - NSSearchField that aggressively claims first responder
+// MARK: - NSSearchField subclass that always wins first-responder
+// HSplitView means the search field is a sibling of the table, not nested inside
+// the same focus-stealing NSViewRepresentable hierarchy, so this now works reliably.
 
 final class FocusableSearchField: NSSearchField {
     override var acceptsFirstResponder: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        // Grab first responder before the event propagates
         window?.makeFirstResponder(self)
         super.mouseDown(with: event)
     }
@@ -43,13 +44,13 @@ struct SearchBarView: NSViewRepresentable {
 
         init(text: Binding<String>) { _text = text }
 
-        // Fires on every keystroke
+        // Every keystroke
         func controlTextDidChange(_ obj: Notification) {
             guard let f = obj.object as? NSSearchField else { return }
             text = f.stringValue
         }
 
-        // Escape clears and gives focus back to table
+        // Escape: clear + resign
         func control(_ control: NSControl, textView: NSTextView,
                      doCommandBy sel: Selector) -> Bool {
             if sel == #selector(NSResponder.cancelOperation(_:)) {
