@@ -21,12 +21,10 @@ struct SidebarView: View {
             }
 
             if document.archiveURL != nil {
-                Section("Summary") {
-                    let checkedEntries = document.allEntries.filter {
-                        document.checked.contains($0.id) && !$0.isDirectory
-                    }
-                    let checkedSize = checkedEntries.reduce(0) { $0 + $1.uncompressedSize }
-                    let dominantType = Self.dominantType(checkedEntries)
+                Section("Selection") {
+                    let checkedFiles = document.checkedEntries.filter { !$0.isDirectory }
+                    let checkedSize  = checkedFiles.reduce(UInt64(0)) { $0 + $1.uncompressedSize }
+                    let dominantType = Self.dominantType(checkedFiles)
 
                     HStack {
                         Label("Checked", systemImage: "checkmark.circle")
@@ -46,7 +44,7 @@ struct SidebarView: View {
                     }
                 }
 
-                Section("Archive Totals") {
+                Section("Archive") {
                     let (count, size) = document.stats
                     HStack {
                         Label("Files", systemImage: "doc.on.doc")
