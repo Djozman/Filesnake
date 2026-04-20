@@ -7,7 +7,8 @@ final class ArchiveDocument: ObservableObject {
     @Published private(set) var archiveURL: URL?
     @Published private(set) var format: ArchiveFormat?
     @Published private(set) var entries: [ArchiveEntry] = []
-    @Published var selection: Set<ArchiveEntry.ID> = []
+    @Published var checked: Set<ArchiveEntry.ID> = []
+    @Published var focused: ArchiveEntry.ID?
     @Published var searchText: String = ""
     @Published private(set) var isBusy: Bool = false
     @Published var lastError: String?
@@ -21,13 +22,25 @@ final class ArchiveDocument: ObservableObject {
         return entries.filter { $0.path.lowercased().contains(q) }
     }
 
-    var selectedEntries: [ArchiveEntry] {
-        entries.filter { selection.contains($0.id) }
+    var checkedEntries: [ArchiveEntry] {
+        entries.filter { checked.contains($0.id) }
     }
 
     var currentEntry: ArchiveEntry? {
-        guard selection.count == 1, let id = selection.first else { return nil }
+        guard let id = focused else { return nil }
         return entries.first { $0.id == id }
+    }
+
+    func toggleChecked(_ id: ArchiveEntry.ID) {
+        if checked.contains(id) { checked.remove(id) } else { checked.insert(id) }
+    }
+
+    func checkAllVisible() {
+        for e in filteredEntries { checked.insert(e.id) }
+    }
+
+    func uncheckAll() {
+        checked.removeAll()
     }
 
     var stats: (count: Int, totalSize: UInt64) {
@@ -47,7 +60,8 @@ final class ArchiveDocument: ObservableObject {
             self.archiveURL = url
             self.format = handler.format
             self.entries = items
-            self.selection = []
+            self.checked = []
+            self.focused = nil
             self.searchText = ""
             self.previewCacheDir = makePreviewCacheDir(for: url)
         } catch {
@@ -60,7 +74,8 @@ final class ArchiveDocument: ObservableObject {
         archiveURL = nil
         format = nil
         entries = []
-        selection = []
+        checked = []
+        focused = nil
         searchText = ""
         if let dir = previewCacheDir {
             try? FileManager.default.removeItem(at: dir)
@@ -69,14 +84,14 @@ final class ArchiveDocument: ObservableObject {
     }
 
     func extractSelection() {
-        guard let handler, !selection.isEmpty else { return }
+        guard let handler, !checked.isEmpty else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.prompt = "Extract Here"
         panel.message = "Choose a destination folder"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
-        let paths = selectedEntries.filter { !$0.isDirectory }.map { $0.path }
+        let paths = checkedEntries.filter { !$0.isDirectory }.map { $0.path }
         runBusy({
             try handler.extract(paths: paths, to: dest)
         }, thenOnMain: {
@@ -104,7 +119,7 @@ final class ArchiveDocument: ObservableObject {
             lastError = "This archive type does not support deletion."
             return
         }
-        let paths = selectedEntries.map { $0.path }
+        let paths = checkedEntries.map { $0.path }
         let prompt = NSAlert()
         prompt.messageText = "Delete \(paths.count) entry(ies) from archive?"
         prompt.informativeText = "This rewrites the archive and cannot be undone."
@@ -117,7 +132,10 @@ final class ArchiveDocument: ObservableObject {
         }, thenOnMain: { [weak self] newEntries in
             guard let self else { return }
             self.entries = newEntries
-            self.selection = self.selection.filter { id in newEntries.contains { $0.id == id } }
+            self.checked = self.checked.filter { id in newEntries.contains { $0.id == id } }
+            if let f = self.focused, !newEntries.contains(where: { $0.id == f }) {
+                self.focused = nil
+            }
         })
     }
 

@@ -34,9 +34,9 @@ struct SidebarView: View {
                         Text(Formatters.bytes(size)).foregroundStyle(.secondary)
                     }
                     HStack {
-                        Label("Selected", systemImage: "checkmark.circle")
+                        Label("Checked", systemImage: "checkmark.circle")
                         Spacer()
-                        Text("\(document.selection.count)").foregroundStyle(.secondary)
+                        Text("\(document.checked.count)").foregroundStyle(.secondary)
                     }
                 }
             }

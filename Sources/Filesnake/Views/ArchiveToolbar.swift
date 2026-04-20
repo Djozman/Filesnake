@@ -6,12 +6,28 @@ struct ArchiveToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
+                document.checkAllVisible()
+            } label: {
+                Label("Check All", systemImage: "checkmark.square")
+            }
+            .disabled(document.archiveURL == nil)
+            .help("Check every visible entry")
+
+            Button {
+                document.uncheckAll()
+            } label: {
+                Label("Uncheck All", systemImage: "square")
+            }
+            .disabled(document.checked.isEmpty)
+            .help("Clear all checks")
+
+            Button {
                 document.extractSelection()
             } label: {
-                Label("Extract Selected", systemImage: "arrow.down.doc")
+                Label("Extract Checked", systemImage: "arrow.down.doc")
             }
-            .disabled(document.selection.isEmpty)
-            .help("Extract selected entries to a folder")
+            .disabled(document.checked.isEmpty)
+            .help("Extract checked entries to a folder")
 
             Button {
                 document.extractAll()
@@ -27,8 +43,8 @@ struct ArchiveToolbar: ToolbarContent {
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
-                .disabled(document.selection.isEmpty)
-                .help("Delete selected entries from the archive")
+                .disabled(document.checked.isEmpty)
+                .help("Delete checked entries from the archive")
             }
         }
     }
