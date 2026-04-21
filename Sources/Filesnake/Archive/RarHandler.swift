@@ -6,12 +6,24 @@ final class RarHandler: ArchiveHandler {
 
     init(url: URL) throws {
         self.url = url
-        _ = try Self.runTool(args: ["l", url.path])
+        let tool = try Self.toolPath()
+        if tool.hasSuffix("unar") {
+            _ = try Self.runToolAt(path: tool, args: ["-l", url.path])
+        } else {
+            _ = try Self.runToolAt(path: tool, args: ["l", url.path])
+        }
     }
 
     func list() throws -> [ArchiveEntry] {
-        let output = try Self.runTool(args: ["l", "-v", url.path])
-        return RarHandler.parseList(output: output)
+        let tool = try Self.toolPath()
+        let output: String
+        if tool.hasSuffix("unar") {
+            output = try Self.runToolAt(path: tool, args: ["-l", url.path])
+            return RarHandler.parseUnarList(output: output)
+        } else {
+            output = try Self.runToolAt(path: tool, args: ["l", "-v", url.path])
+            return RarHandler.parseUnrarList(output: output)
+        }
     }
 
     func extract(paths: [String], to destination: URL) throws {
@@ -44,14 +56,6 @@ final class RarHandler: ArchiveHandler {
             }
         }
         throw ArchiveError.notFound("Could not locate extracted file for: \(path)")
-    }
-
-    // MARK: - Private helpers
-
-    @discardableResult
-    private static func runTool(args: [String]) throws -> String {
-        let path = try toolPath()
-        return try runToolAt(path: path, args: args)
     }
 
     @discardableResult
@@ -95,16 +99,13 @@ final class RarHandler: ArchiveHandler {
         )
     }
 
-    // MARK: - List parsing
-
-    private static func parseList(output: String) -> [ArchiveEntry] {
+    private static func parseUnrarList(output: String) -> [ArchiveEntry] {
         var entries: [ArchiveEntry] = []
         let lines = output.components(separatedBy: "\n")
         var inBody = false
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            // Detect the separator lines (all dashes) that bracket the file list
             if !trimmed.isEmpty && trimmed.allSatisfy({ $0 == "-" }) && trimmed.count > 10 {
                 inBody.toggle()
                 continue
@@ -126,26 +127,33 @@ final class RarHandler: ArchiveHandler {
                 crc32: nil
             ))
         }
+        return entries
+    }
 
-        // Fallback: treat every plausible line as a path
-        if entries.isEmpty {
-            for line in lines {
-                let t = line.trimmingCharacters(in: .whitespaces)
-                guard !t.isEmpty,
-                      !t.hasPrefix("-"),
-                      !t.lowercased().hasPrefix("name"),
-                      !t.lowercased().hasPrefix("archive") else { continue }
-                let isDir = t.hasSuffix("/")
-                entries.append(ArchiveEntry(
-                    path: t,
-                    isDirectory: isDir,
-                    uncompressedSize: 0,
-                    compressedSize: 0,
-                    modified: nil,
-                    crc32: nil
-                ))
-            }
+    private static func parseUnarList(output: String) -> [ArchiveEntry] {
+        var entries: [ArchiveEntry] = []
+        let lines = output.components(separatedBy: "\n")
+
+        for rawLine in lines {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            guard !line.hasPrefix("UNAR "),
+                  !line.hasPrefix("Archive:"),
+                  !line.hasPrefix("Details:"),
+                  !line.hasPrefix("  "),
+                  !line.hasPrefix("Extracting") else { continue }
+
+            let isDir = line.hasSuffix("/")
+            entries.append(ArchiveEntry(
+                path: line,
+                isDirectory: isDir,
+                uncompressedSize: 0,
+                compressedSize: 0,
+                modified: nil,
+                crc32: nil
+            ))
         }
+
         return entries
     }
 }
