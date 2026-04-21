@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 @main
 struct FilesnakeApp: App {
@@ -11,11 +12,14 @@ struct FilesnakeApp: App {
                 .environmentObject(document)
                 .frame(minWidth: 900, minHeight: 560)
                 .navigationTitle("")
+                .onOpenURL { url in
+                    document.open(url: url)
+                }
         }
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Open\u{2026}") {
+                Button("Open…") {
                     let panel = NSOpenPanel()
                     panel.allowedContentTypes = ArchiveFormat.allowedOpenTypes
                     panel.allowsMultipleSelection = false
