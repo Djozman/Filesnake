@@ -20,9 +20,9 @@ final class RarHandler: ArchiveHandler {
     func extract(paths: [String], to destination: URL) throws {
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let unar = try Self.unarPath()
-        for path in paths {
-            try Self.runToolAt(path: unar, args: ["-o", destination.path, url.path, path])
-        }
+        // Use -D to prevent unar from creating a containing subdirectory,
+        // and pass all paths in one call so everything extracts into the same folder.
+        try Self.runToolAt(path: unar, args: ["-D", "-o", destination.path, url.path] + paths)
     }
 
     func extractToMemory(path: String) throws -> Data {
