@@ -17,12 +17,32 @@ final class NonFocusableScrollView: NSScrollView {
     override func becomeFirstResponder() -> Bool { false }
 }
 
-// MARK: - NSTableView that refuses first responder
+// MARK: - NSTableView with full row interaction
 
 final class FilesnakeTableView: NSTableView {
-    override var acceptsFirstResponder: Bool { false }
-    override func becomeFirstResponder() -> Bool { false }
     override func mouseDown(with event: NSEvent) { super.mouseDown(with: event) }
+}
+
+// MARK: - Custom row view with blue (accent) selection highlight
+
+final class AccentRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard isSelected else { return }
+        // Fill the full row with accent color (no vertical gap)
+        let color = NSColor.controlAccentColor
+        color.setFill()
+        let selRect = bounds
+        let path = NSBezierPath(rect: selRect)
+        path.fill()
+
+        // Thin white separator at the bottom between stacked selections
+        NSColor.white.withAlphaComponent(0.15).setFill()
+        NSRect(x: selRect.minX, y: bounds.maxY - 0.5, width: selRect.width, height: 0.5).fill()
+    }
+
+    override var interiorBackgroundStyle: NSView.BackgroundStyle {
+        return isSelected ? .emphasized : .normal
+    }
 }
 
 // MARK: - Centered cell view (reusable)
@@ -241,6 +261,12 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         default: return
         }
         document?.toggleSort(key: key)
+    }
+
+    // MARK: Row view (blue highlight)
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        return AccentRowView()
     }
 
     // MARK: Selection

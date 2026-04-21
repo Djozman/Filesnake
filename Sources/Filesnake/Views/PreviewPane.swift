@@ -18,7 +18,6 @@ struct PreviewPane: View {
                             .layoutPriority(0)
                         Divider()
                         InfoFooter(entry: entry)
-                            .frame(height: 36)
                             .layoutPriority(1)
                     }
                 } else {
@@ -85,6 +84,9 @@ private struct FitQLPreviewView: NSViewRepresentable {
         guard pane.height > 0, pane.width > 0,
               content.height > 0, content.width > 0 else { return }
 
+        // Disable horizontal scrolling so it doesn't fight with the split view divider
+        sv.hasHorizontalScroller = false
+        sv.horizontalScrollElasticity = .none
         sv.allowsMagnification = true
 
         // If content is a tall scrollable document (text/code/JSON),
@@ -137,18 +139,34 @@ private struct InfoCard: View {
 private struct InfoFooter: View {
     let entry: ArchiveEntry
     var body: some View {
-        HStack(spacing: 12) {
-            Text(entry.name).bold().lineLimit(1).truncationMode(.middle)
-            Text("\u{00b7}").foregroundStyle(.secondary)
-            Text(Formatters.bytes(entry.uncompressedSize))
-                .foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
-            Spacer(minLength: 8)
-            Text(Formatters.date(entry.modified))
-                .foregroundStyle(.secondary).lineLimit(1)
+        ViewThatFits(in: .horizontal) {
+            // Wide layout: everything in one row
+            HStack(spacing: 12) {
+                Text(entry.name).bold().lineLimit(1).truncationMode(.middle)
+                Text("\u{00b7}").foregroundStyle(.secondary)
+                Text(Formatters.bytes(entry.uncompressedSize))
+                    .foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                Spacer(minLength: 8)
+                Text(Formatters.date(entry.modified))
+                    .foregroundStyle(.secondary).lineLimit(1)
+            }
+
+            // Narrow layout: stack vertically
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.name).bold().lineLimit(2).truncationMode(.middle)
+                HStack(spacing: 8) {
+                    Text(Formatters.bytes(entry.uncompressedSize))
+                        .foregroundStyle(.secondary).monospacedDigit()
+                    Text("\u{00b7}").foregroundStyle(.tertiary)
+                    Text(Formatters.date(entry.modified))
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .font(.callout)
         .padding(.horizontal, 12)
-        .frame(height: 34)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
     }
 }

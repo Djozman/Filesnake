@@ -69,7 +69,9 @@ private final class InvisibleSplitView: NSSplitView {
         rect.fill()
     }
 
-    private let hotZone: CGFloat = 4
+    private let hotZone: CGFloat = 5
+    private var dividerTrackingAreas: [NSTrackingArea] = []
+    private var cursorPushed = false
 
     private func dividerIndex(at point: NSPoint) -> Int? {
         let dT = dividerThickness
@@ -93,8 +95,15 @@ private final class InvisibleSplitView: NSSplitView {
         return super.hitTest(point)
     }
 
-    override func resetCursorRects() {
-        super.resetCursorRects()
+    // MARK: Tracking areas for cursor (replaces resetCursorRects)
+
+    override func updateTrackingAreas() {
+        // Remove old divider tracking areas
+        for area in dividerTrackingAreas {
+            removeTrackingArea(area)
+        }
+        dividerTrackingAreas.removeAll()
+
         let subs = arrangedSubviews
         let dT = dividerThickness
         for i in 0..<(subs.count - 1) {
@@ -106,11 +115,39 @@ private final class InvisibleSplitView: NSSplitView {
                 width: dT + hotZone * 2,
                 height: bounds.height
             )
-            addCursorRect(zoneRect, cursor: .resizeLeftRight)
+            let area = NSTrackingArea(
+                rect: zoneRect,
+                options: [.mouseEnteredAndExited, .activeInActiveApp],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(area)
+            dividerTrackingAreas.append(area)
+        }
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        if !cursorPushed {
+            NSCursor.resizeLeftRight.push()
+            cursorPushed = true
         }
     }
 
+    override func mouseExited(with event: NSEvent) {
+        if cursorPushed {
+            NSCursor.pop()
+            cursorPushed = false
+        }
+    }
+
+    // MARK: Mouse handling
+
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if dividerIndex(at: point) != nil {
+            window?.makeFirstResponder(self)
+        }
         super.mouseDown(with: event)
     }
 
@@ -119,16 +156,6 @@ private final class InvisibleSplitView: NSSplitView {
     }
 
     func mouseDownCanMoveWindow() -> Bool { false }
-
-    override func cursorUpdate(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if dividerIndex(at: point) != nil {
-            window?.makeFirstResponder(self)
-            NSCursor.resizeLeftRight.set()
-        } else {
-            super.cursorUpdate(with: event)
-        }
-    }
 }
 
 // MARK: - NSSplitView three-pane layout
