@@ -1,5 +1,6 @@
 .DS_Store
 .build/
+build/
 .swiftpm/
 DerivedData/
 *.xcodeproj/xcuserdata/
@@ -10,3 +11,4 @@ xcuserdata/
 *.xcuserstate
 .idea/
 .vscode/
+sort_files.py

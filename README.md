@@ -1,8 +1,4 @@
-<p align="center">
-  <img src="Filesnake.png" width="128" alt="Filesnake icon">
-</p>
-
-<h1 align="center">Filesnake</h1>
+<h1 align="center">🐍 Filesnake</h1>
 
 <p align="center">
   <b>The modern, native macOS archive manager.</b><br>
