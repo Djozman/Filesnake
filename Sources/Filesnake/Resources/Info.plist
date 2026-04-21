@@ -27,5 +27,91 @@
     <string>13.0</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright &#169; 2024 Filesnake. All rights reserved.</string>
+
+    <!-- Declare supported document types so macOS shows Filesnake in Open With -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <!-- ZIP -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>ZIP Archive</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.pkware.zip-archive</string>
+                <string>public.zip-archive</string>
+            </array>
+        </dict>
+        <!-- TAR -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>TAR Archive</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.tar-archive</string>
+            </array>
+        </dict>
+        <!-- GZ / TGZ -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Gzip Archive</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.gnu.gnu-zip-archive</string>
+                <string>org.gnu.gnu-zip-tar-archive</string>
+            </array>
+        </dict>
+        <!-- BZ2 / TBZ -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Bzip2 Archive</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.bzip2-archive</string>
+                <string>org.bzip.bzip2-archive</string>
+            </array>
+        </dict>
+        <!-- XZ / TXZ -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>XZ Archive</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.tukaani.xz-archive</string>
+                <string>org.tukaani.tar-xz-archive</string>
+            </array>
+        </dict>
+        <!-- RAR -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>RAR Archive</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.rarlab.rar-archive</string>
+            </array>
+        </dict>
+        <!-- 7-Zip -->
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>7-Zip Archive</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.7-zip.7-zip-archive</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
