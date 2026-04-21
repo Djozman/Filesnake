@@ -45,6 +45,101 @@ final class AccentRowView: NSTableRowView {
     }
 }
 
+// MARK: - Name cell with disclosure triangle + indent
+
+final class NameCellView: NSTableCellView {
+    /// Closure invoked when the disclosure triangle is clicked.
+    var onToggleExpand: (() -> Void)?
+
+    private let disclosure = NSButton()
+    private let iconView = NSImageView()
+    private let nameField = NSTextField(labelWithString: "")
+    private var leadingConstraint: NSLayoutConstraint!
+
+    private static let indentPerLevel: CGFloat = 14
+    private static let disclosureSize: CGFloat = 14
+    private static let baseLeading: CGFloat = 2
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+
+        // Disclosure button (chevron that flips on expansion)
+        disclosure.isBordered = false
+        disclosure.bezelStyle = .regularSquare
+        disclosure.imagePosition = .imageOnly
+        disclosure.imageScaling = .scaleProportionallyDown
+        disclosure.refusesFirstResponder = true
+        disclosure.target = self
+        disclosure.action = #selector(disclosureClicked)
+        disclosure.translatesAutoresizingMaskIntoConstraints = false
+        // Subtle styling — muted color, small size — so it doesn't fight the row
+        disclosure.contentTintColor = .secondaryLabelColor
+        addSubview(disclosure)
+
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        imageView = iconView
+        addSubview(iconView)
+
+        nameField.translatesAutoresizingMaskIntoConstraints = false
+        nameField.lineBreakMode = .byTruncatingMiddle
+        nameField.isBordered = false
+        nameField.drawsBackground = false
+        nameField.isEditable = false
+        nameField.isSelectable = false
+        textField = nameField
+        addSubview(nameField)
+
+        leadingConstraint = disclosure.leadingAnchor.constraint(
+            equalTo: leadingAnchor, constant: Self.baseLeading)
+
+        NSLayoutConstraint.activate([
+            leadingConstraint,
+            disclosure.centerYAnchor.constraint(equalTo: centerYAnchor),
+            disclosure.widthAnchor.constraint(equalToConstant: Self.disclosureSize),
+            disclosure.heightAnchor.constraint(equalToConstant: Self.disclosureSize),
+
+            iconView.leadingAnchor.constraint(equalTo: disclosure.trailingAnchor, constant: 2),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 16),
+            iconView.heightAnchor.constraint(equalToConstant: 16),
+
+            nameField.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 5),
+            nameField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            nameField.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func disclosureClicked() { onToggleExpand?() }
+
+    func configure(depth: Int,
+                   isDirectory: Bool,
+                   isExpanded: Bool,
+                   icon: NSImage?,
+                   name: String) {
+        leadingConstraint.constant = Self.baseLeading + CGFloat(depth) * Self.indentPerLevel
+        iconView.image = icon
+        nameField.stringValue = name
+        nameField.textColor = .labelColor
+
+        if isDirectory {
+            let symbol = isExpanded ? "chevron.down" : "chevron.right"
+            let a11y = isExpanded ? "Collapse" : "Expand"
+            disclosure.image = NSImage(systemSymbolName: symbol, accessibilityDescription: a11y)
+            disclosure.toolTip = isExpanded ? "Collapse" : "Expand"
+            disclosure.isHidden = false
+            disclosure.isEnabled = true
+        } else {
+            disclosure.image = nil
+            disclosure.toolTip = nil
+            disclosure.isHidden = true
+            disclosure.isEnabled = false
+        }
+    }
+}
+
 // MARK: - Centered cell view (reusable)
 
 final class CenteredTableCellView: NSTableCellView {
@@ -132,20 +227,95 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
     func updateNSView(_ scrollView: NonFocusableScrollView, context: Context) {
         let coord = context.coordinator
         guard let table = scrollView.documentView as? FilesnakeTableView else { return }
-        let newEntries = document.filteredEntries
-        let needsReload = coord.entries.map(\.id) != newEntries.map(\.id)
-            || coord.checkedSnapshot != document.checked
-            || coord.sortKey != document.sortKey
-            || coord.sortAscending != document.sortAscending
 
-        coord.entries = newEntries
+        let newRows = document.filteredDisplayRows
+        let oldRows = coord.rows
+        let oldExpanded = coord.expandedSnapshot
+
+        let rowIdsChanged = oldRows.map(\.id) != newRows.map(\.id)
+        let depthsChanged = oldRows.map(\.depth) != newRows.map(\.depth)
+        let checkedChanged = coord.checkedSnapshot != document.checked
+        let expandedChanged = oldExpanded != document.expandedFolders
+        let sortChanged = coord.sortKey != document.sortKey
+            || coord.sortAscending != document.sortAscending
+        let folderPathChanged = coord.folderPathSnapshot != document.currentFolderPath
+        let searchChanged = coord.searchSnapshot != document.searchText
+
+        // Commit the new snapshots before mutating the table, so any
+        // callbacks that fire mid-animation see the current state.
+        coord.rows = newRows
         coord.checkedSnapshot = document.checked
+        coord.expandedSnapshot = document.expandedFolders
         coord.document = document
         coord.sortKey = document.sortKey
         coord.sortAscending = document.sortAscending
-        if needsReload {
+        coord.folderPathSnapshot = document.currentFolderPath
+        coord.searchSnapshot = document.searchText
+
+        // Expansion-only delta → animate insert/remove. Everything else →
+        // hard reload (navigation, sort, search, open, etc.).
+        let onlyExpansionDelta = expandedChanged
+            && !folderPathChanged
+            && !searchChanged
+            && !sortChanged
+            && !checkedChanged
+            && rowIdsChanged
+
+        if onlyExpansionDelta {
+            animateExpansionDiff(table: table, oldRows: oldRows, newRows: newRows,
+                                 oldExpanded: oldExpanded,
+                                 newExpanded: document.expandedFolders)
+        } else if rowIdsChanged || depthsChanged || checkedChanged
+                    || expandedChanged || sortChanged {
             table.reloadData()
             updateSortIndicators(table: table, key: document.sortKey, ascending: document.sortAscending)
+        }
+    }
+
+    private func animateExpansionDiff(table: NSTableView,
+                                      oldRows: [ArchiveDocument.DisplayRow],
+                                      newRows: [ArchiveDocument.DisplayRow],
+                                      oldExpanded: Set<String>,
+                                      newExpanded: Set<String>) {
+        let diff = newRows.map(\.id).difference(from: oldRows.map(\.id))
+        var insertions = IndexSet()
+        var removals = IndexSet()
+        for change in diff {
+            switch change {
+            case .insert(let offset, _, _): insertions.insert(offset)
+            case .remove(let offset, _, _): removals.insert(offset)
+            }
+        }
+
+        // Finder-style: new rows slide down, removed rows slide up, both fade.
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            ctx.allowsImplicitAnimation = true
+            table.beginUpdates()
+            if !removals.isEmpty {
+                table.removeRows(at: removals, withAnimation: [.slideUp, .effectFade])
+            }
+            if !insertions.isEmpty {
+                table.insertRows(at: insertions, withAnimation: [.slideDown, .effectFade])
+            }
+            table.endUpdates()
+        }
+
+        // Flip the chevron on the folder(s) whose expanded state just changed.
+        let toggledPaths = oldExpanded.symmetricDifference(newExpanded)
+        if !toggledPaths.isEmpty {
+            var parentRows = IndexSet()
+            for (idx, row) in newRows.enumerated()
+            where row.entry.isDirectory && toggledPaths.contains(row.entry.path) {
+                parentRows.insert(idx)
+            }
+            if !parentRows.isEmpty {
+                let colIdx = table.column(withIdentifier: NSUserInterfaceItemIdentifier("name"))
+                if colIdx >= 0 {
+                    table.reloadData(forRowIndexes: parentRows,
+                                     columnIndexes: IndexSet(integer: colIdx))
+                }
+            }
         }
     }
 
@@ -175,21 +345,30 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
 @MainActor
 final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
 
-    var entries: [ArchiveEntry] = []
+    var rows: [ArchiveDocument.DisplayRow] = []
     var checkedSnapshot: Set<ArchiveEntry.ID> = []
+    var expandedSnapshot: Set<String> = []
+    var folderPathSnapshot: String = ""
+    var searchSnapshot: String = ""
     var document: ArchiveDocument?
     var sortKey: ArchiveDocument.SortKey = .name
     var sortAscending: Bool = true
     weak var table: FilesnakeTableView?
     weak var scrollView: NonFocusableScrollView?
 
+    private func entry(at row: Int) -> ArchiveEntry? {
+        guard row >= 0, row < rows.count else { return nil }
+        return rows[row].entry
+    }
+
     // MARK: DataSource
 
-    func numberOfRows(in tableView: NSTableView) -> Int { entries.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard row < entries.count else { return nil }
-        let entry = entries[row]
+        guard row < rows.count else { return nil }
+        let displayRow = rows[row]
+        let entry = displayRow.entry
         switch tableColumn?.identifier.rawValue {
         case "check":
             let cellID = NSUserInterfaceItemIdentifier("CheckCell")
@@ -200,25 +379,38 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 btn = NSButton(checkboxWithTitle: "", target: self, action: #selector(checkboxClicked(_:)))
                 btn.identifier = cellID
                 btn.refusesFirstResponder = true
+                btn.allowsMixedState = true
             }
-            btn.state = checkedSnapshot.contains(entry.id) ? .on : .off
+            // Derived tri-state: folders inherit from their file descendants.
+            switch document?.folderCheckState(entry) ?? .unchecked {
+            case .unchecked: btn.state = .off
+            case .mixed:     btn.state = .mixed
+            case .checked:   btn.state = .on
+            }
             btn.tag = row
             btn.action = #selector(checkboxClicked(_:))
             btn.target = self
             return btn
 
         case "name":
-            let cellID = NSUserInterfaceItemIdentifier("NameCell")
-            let cell: NSTableCellView
-            if let reused = tableView.makeView(withIdentifier: cellID, owner: nil) as? NSTableCellView {
+            let cellID = NSUserInterfaceItemIdentifier("NameRowCell")
+            let cell: NameCellView
+            if let reused = tableView.makeView(withIdentifier: cellID, owner: nil) as? NameCellView {
                 cell = reused
             } else {
-                cell = makeNameCell()
+                cell = NameCellView()
                 cell.identifier = cellID
             }
-            cell.imageView?.image = FileIcon.icon(for: entry)
-            cell.textField?.stringValue = entry.isDirectory ? entry.name + "  \u{203a}" : entry.name
-            cell.textField?.textColor = .labelColor
+            let expanded = document?.isExpanded(entry) ?? false
+            cell.configure(
+                depth: displayRow.depth,
+                isDirectory: entry.isDirectory,
+                isExpanded: expanded,
+                icon: FileIcon.icon(for: entry),
+                name: entry.name)
+            cell.onToggleExpand = { [weak self] in
+                self?.document?.toggleExpanded(entry)
+            }
             return cell
 
         case "size":
@@ -274,21 +466,19 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard let t = notification.object as? NSTableView else { return }
         let idx = t.selectedRow
-        document?.focused = (idx >= 0 && idx < entries.count) ? entries[idx].id : nil
+        document?.focused = entry(at: idx)?.id
     }
 
     // MARK: Row actions
 
     @objc func rowDoubleClicked(_ sender: NSTableView) {
-        let row = sender.clickedRow
-        guard row >= 0, row < entries.count else { return }
-        if entries[row].isDirectory { document?.enterFolder(entries[row]) }
+        guard let e = entry(at: sender.clickedRow) else { return }
+        if e.isDirectory { document?.enterFolder(e) }
     }
 
     @objc func checkboxClicked(_ sender: NSButton) {
-        let row = sender.tag
-        guard row >= 0, row < entries.count else { return }
-        document?.toggleChecked(entries[row].id)
+        guard let e = entry(at: sender.tag) else { return }
+        document?.toggleChecked(e.id)
     }
 
     // MARK: Right-click menu
@@ -305,10 +495,12 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         }
         guard !targetRows.isEmpty else { return }
 
-        let targetEntries = targetRows.compactMap { $0 < entries.count ? entries[$0] : nil }
+        let targetEntries = targetRows.compactMap { entry(at: $0) }
         let targetIDs = targetEntries.map(\.id)
-        let allChecked = targetIDs.allSatisfy { doc.checked.contains($0) }
-        let noneChecked = targetIDs.allSatisfy { !doc.checked.contains($0) }
+        // Tri-state-aware: treat `.mixed` as "not fully checked" so clicking
+        // toggles to fully checked.
+        let allChecked = targetEntries.allSatisfy { doc.folderCheckState($0) == .checked }
+        let noneChecked = targetEntries.allSatisfy { doc.folderCheckState($0) == .unchecked }
         let count = targetEntries.count
         let label = count == 1 ? "\"\(targetEntries[0].name)\"" : "\(count) items"
 
@@ -325,30 +517,60 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
             ui.representedObject = targetIDs as NSArray; ui.target = self
             menu.addItem(ci); menu.addItem(ui)
         }
-        menu.addItem(.separator())
-        if count == 1, let folder = targetEntries.first, folder.isDirectory {
-            let oi = NSMenuItem(title: "Open Folder", action: #selector(menuOpenFolder(_:)), keyEquivalent: "")
-            oi.representedObject = folder; oi.target = self
-            menu.addItem(oi); menu.addItem(.separator())
+
+        // Open / Open With — only makes sense for a single entry.
+        if count == 1, let solo = targetEntries.first {
+            menu.addItem(.separator())
+            let openTitle = solo.isDirectory ? "Open in Finder" : "Open"
+            let oi = NSMenuItem(title: openTitle, action: #selector(menuOpen(_:)), keyEquivalent: "")
+            oi.representedObject = solo; oi.target = self
+            menu.addItem(oi)
+            if !solo.isDirectory {
+                let owi = NSMenuItem(title: "Open With\u{2026}",
+                                     action: #selector(menuOpenWith(_:)), keyEquivalent: "")
+                owi.representedObject = solo; owi.target = self
+                menu.addItem(owi)
+            }
+            if solo.isDirectory {
+                // Legacy: "enter" the folder (switch the middle pane into it).
+                let enter = NSMenuItem(title: "Enter Folder",
+                                       action: #selector(menuEnterFolder(_:)), keyEquivalent: "")
+                enter.representedObject = solo; enter.target = self
+                menu.addItem(enter)
+            }
         }
+
+        menu.addItem(.separator())
         let ec = NSMenuItem(
             title: "Extract Checked\u{2026}",
             action: doc.checked.isEmpty ? nil : #selector(menuExtractChecked(_:)), keyEquivalent: "")
         ec.target = self; ec.isEnabled = !doc.checked.isEmpty
         menu.addItem(ec)
-        let hasFiles = targetEntries.contains { !$0.isDirectory }
+        let hasEntries = !targetEntries.isEmpty
         let es = NSMenuItem(
             title: "Extract Selection\u{2026}",
-            action: hasFiles ? #selector(menuExtractSelection(_:)) : nil, keyEquivalent: "")
-        es.representedObject = targetIDs as NSArray; es.target = self; es.isEnabled = hasFiles
+            action: hasEntries ? #selector(menuExtractSelection(_:)) : nil, keyEquivalent: "")
+        es.representedObject = targetIDs as NSArray; es.target = self; es.isEnabled = hasEntries
         menu.addItem(es)
         let eh = NSMenuItem(
             title: "Extract Selection Here",
-            action: hasFiles ? #selector(menuExtractHere(_:)) : nil, keyEquivalent: "")
-        eh.representedObject = targetIDs as NSArray; eh.target = self; eh.isEnabled = hasFiles
+            action: hasEntries ? #selector(menuExtractHere(_:)) : nil, keyEquivalent: "")
+        eh.representedObject = targetIDs as NSArray; eh.target = self; eh.isEnabled = hasEntries
         menu.addItem(eh)
+
         if doc.format?.supportsDeletion == true {
             menu.addItem(.separator())
+            // Delete the currently right-clicked selection (files and/or folders).
+            let ds = NSMenuItem(
+                title: "Delete \(label) from Archive",
+                action: hasEntries ? #selector(menuDeleteSelection(_:)) : nil, keyEquivalent: "")
+            ds.representedObject = targetIDs as NSArray; ds.target = self
+            ds.isEnabled = hasEntries
+            ds.attributedTitle = NSAttributedString(
+                string: "Delete \(label) from Archive",
+                attributes: [.foregroundColor: NSColor.systemRed])
+            menu.addItem(ds)
+
             let di = NSMenuItem(
                 title: "Delete Checked from Archive",
                 action: doc.checked.isEmpty ? nil : #selector(menuDeleteChecked(_:)), keyEquivalent: "")
@@ -361,32 +583,47 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     }
 
     @objc func menuToggleCheck(_ sender: NSMenuItem) {
-        guard let ids = sender.representedObject as? NSArray else { return }
-        for case let id as ArchiveEntry.ID in ids { document?.toggleChecked(id) }
-        table?.reloadData()
+        guard let ids = sender.representedObject as? NSArray, let doc = document else { return }
+        let idList = ids.compactMap { $0 as? ArchiveEntry.ID }
+        // Tri-state-aware: fully-checked → uncheck, otherwise → check.
+        let allChecked = idList.allSatisfy { id in
+            guard let e = doc.entries.first(where: { $0.id == id }) else { return false }
+            return doc.folderCheckState(e) == .checked
+        }
+        doc.setChecked(!allChecked, forIDs: idList)
+        // No reloadData here — @Published `checked` triggers updateNSView.
     }
     @objc func menuCheckAll(_ sender: NSMenuItem) {
         guard let ids = sender.representedObject as? NSArray else { return }
-        for case let id as ArchiveEntry.ID in ids { document?.checked.insert(id) }
-        table?.reloadData()
+        let idList = ids.compactMap { $0 as? ArchiveEntry.ID }
+        document?.setChecked(true, forIDs: idList)
     }
     @objc func menuUncheckAll(_ sender: NSMenuItem) {
         guard let ids = sender.representedObject as? NSArray else { return }
-        for case let id as ArchiveEntry.ID in ids { document?.checked.remove(id) }
-        table?.reloadData()
+        let idList = ids.compactMap { $0 as? ArchiveEntry.ID }
+        document?.setChecked(false, forIDs: idList)
     }
-    @objc func menuOpenFolder(_ sender: NSMenuItem) {
+    @objc func menuEnterFolder(_ sender: NSMenuItem) {
         guard let entry = sender.representedObject as? ArchiveEntry else { return }
         document?.enterFolder(entry)
+    }
+    @objc func menuOpen(_ sender: NSMenuItem) {
+        guard let entry = sender.representedObject as? ArchiveEntry else { return }
+        document?.openEntry(entry)
+    }
+    @objc func menuOpenWith(_ sender: NSMenuItem) {
+        guard let entry = sender.representedObject as? ArchiveEntry else { return }
+        document?.openEntryWith(entry)
+    }
+    @objc func menuDeleteSelection(_ sender: NSMenuItem) {
+        guard let ids = sender.representedObject as? NSArray else { return }
+        let idList = ids.compactMap { $0 as? ArchiveEntry.ID }
+        document?.deletePaths(idList)
     }
     @objc func menuExtractChecked(_ sender: NSMenuItem) { document?.extractSelection() }
     @objc func menuExtractSelection(_ sender: NSMenuItem) {
         guard let ids = sender.representedObject as? NSArray, let doc = document else { return }
-        let paths = ids.compactMap { id -> String? in
-            guard let eid = id as? ArchiveEntry.ID,
-                  let e = entries.first(where: { $0.id == eid }), !e.isDirectory else { return nil }
-            return e.path
-        }
+        let paths = resolveExtractPaths(ids: ids)
         guard !paths.isEmpty else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false
@@ -398,39 +635,32 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         guard let ids = sender.representedObject as? NSArray, let doc = document,
               let archiveURL = doc.archiveURL else { return }
         let dest = archiveURL.deletingLastPathComponent()
-        let paths = ids.compactMap { id -> String? in
-            guard let eid = id as? ArchiveEntry.ID,
-                  let e = entries.first(where: { $0.id == eid }), !e.isDirectory else { return nil }
-            return e.path
-        }
+        let paths = resolveExtractPaths(ids: ids)
         guard !paths.isEmpty else { return }
         doc.extractPaths(paths, to: dest)
+    }
+
+    /// Resolve selected IDs to extractable file paths.
+    /// If a selected entry is a directory, include all files under that directory.
+    private func resolveExtractPaths(ids: NSArray) -> [String] {
+        guard let doc = document else { return [] }
+        var paths: [String] = []
+        for case let eid as ArchiveEntry.ID in ids {
+            guard let e = rows.first(where: { $0.entry.id == eid })?.entry else { continue }
+            if e.isDirectory {
+                // Add all files under this directory
+                let prefix = e.path.hasSuffix("/") ? e.path : e.path + "/"
+                let children = doc.entries.filter { !$0.isDirectory && $0.path.hasPrefix(prefix) }
+                paths.append(contentsOf: children.map(\.path))
+            } else {
+                paths.append(e.path)
+            }
+        }
+        return Array(Set(paths)) // deduplicate
     }
     @objc func menuDeleteChecked(_ sender: NSMenuItem) { document?.deleteSelection() }
 
     // MARK: Cell builders
-
-    private func makeNameCell() -> NSTableCellView {
-        let cell = NSTableCellView()
-        let iv = NSImageView()
-        iv.translatesAutoresizingMaskIntoConstraints = false
-        iv.imageScaling = .scaleProportionallyDown
-        cell.imageView = iv; cell.addSubview(iv)
-        let tf = NSTextField(labelWithString: "")
-        tf.translatesAutoresizingMaskIntoConstraints = false
-        tf.lineBreakMode = .byTruncatingMiddle
-        cell.textField = tf; cell.addSubview(tf)
-        NSLayoutConstraint.activate([
-            iv.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            iv.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            iv.widthAnchor.constraint(equalToConstant: 16),
-            iv.heightAnchor.constraint(equalToConstant: 16),
-            tf.leadingAnchor.constraint(equalTo: iv.trailingAnchor, constant: 5),
-            tf.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
-            tf.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
-        return cell
-    }
 
     private func centeredCell(_ text: String, id: String, in tableView: NSTableView) -> NSTableCellView {
         let cellID = NSUserInterfaceItemIdentifier(id)

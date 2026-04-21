@@ -8,6 +8,7 @@ struct PreviewPane: View {
     var body: some View {
         Group {
             if let entry = document.currentEntry {
+                // Archive entry preview
                 if entry.isDirectory {
                     InfoCard(entry: entry)
                 } else if let url = document.materializeForPreview(entry) {
@@ -22,6 +23,17 @@ struct PreviewPane: View {
                     }
                 } else {
                     InfoCard(entry: entry)
+                }
+            } else if let sidebarURL = document.sidebarPreviewURL {
+                // Sidebar file preview
+                VStack(spacing: 0) {
+                    FitQLPreviewView(url: sidebarURL)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .layoutPriority(0)
+                    Divider()
+                    SidebarFileFooter(url: sidebarURL)
+                        .layoutPriority(1)
                 }
             } else {
                 VStack(spacing: 12) {
@@ -168,5 +180,49 @@ private struct InfoFooter: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
+    }
+}
+
+// MARK: - Sidebar file footer
+
+private struct SidebarFileFooter: View {
+    let url: URL
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                Text(url.lastPathComponent).bold().lineLimit(1).truncationMode(.middle)
+                Text("\u{00b7}").foregroundStyle(.secondary)
+                Text(fileSize).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                Spacer(minLength: 8)
+                Text(modDate).foregroundStyle(.secondary).lineLimit(1)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(url.lastPathComponent).bold().lineLimit(2).truncationMode(.middle)
+                HStack(spacing: 8) {
+                    Text(fileSize).foregroundStyle(.secondary).monospacedDigit()
+                    Text("\u{00b7}").foregroundStyle(.tertiary)
+                    Text(modDate).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+    }
+
+    private var fileSize: String {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? UInt64 else { return "—" }
+        return Formatters.bytes(size)
+    }
+
+    private var modDate: String {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let date = attrs[.modificationDate] as? Date else { return "—" }
+        return Formatters.date(date)
     }
 }

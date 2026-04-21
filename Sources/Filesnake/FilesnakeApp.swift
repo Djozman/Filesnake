@@ -43,12 +43,40 @@ struct FilesnakeApp: App {
                     }
                 }
                 .keyboardShortcut("o", modifiers: [.command])
+
+                Button("Create Archive…") {
+                    Self.createArchiveFlow(document: document)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             CommandGroup(after: .newItem) {
                 Divider()
                 Button("Close Archive") { document.close() }
                     .keyboardShortcut("w", modifiers: [.command])
                     .disabled(document.archiveURL == nil)
+
+                Divider()
+
+                // MARK: Extract presets
+                Menu("Extract Checked To…") {
+                    Button("Desktop") {
+                        extractCheckedToPreset(.desktopDirectory)
+                    }
+                    Button("Downloads") {
+                        extractCheckedToPreset(.downloadsDirectory)
+                    }
+                    Button("Documents") {
+                        extractCheckedToPreset(.documentDirectory)
+                    }
+                    Divider()
+                    Button("Same Folder as Archive") {
+                        guard let archiveURL = document.archiveURL else { return }
+                        let dest = archiveURL.deletingLastPathComponent()
+                        document.extractCheckedTo(dest)
+                    }
+                    .disabled(document.archiveURL == nil)
+                }
+                .disabled(document.checked.isEmpty)
             }
         }
     }
@@ -61,6 +89,47 @@ struct FilesnakeApp: App {
         guard appWindows.count > 1 else { return }
         for window in appWindows.dropFirst() {
             window.close()
+        }
+    }
+
+    /// Extract checked entries to a preset folder (Desktop, Downloads, etc.)
+    private func extractCheckedToPreset(_ directory: FileManager.SearchPathDirectory) {
+        guard let dest = FileManager.default.urls(for: directory, in: .userDomainMask).first else { return }
+        document.extractCheckedTo(dest)
+    }
+
+    /// Create a new ZIP archive from user-selected files.
+    static func createArchiveFlow(document: ArchiveDocument) {
+        // Step 1: Pick files/folders to archive
+        let openPanel = NSOpenPanel()
+        openPanel.allowsMultipleSelection = true
+        openPanel.canChooseFiles = true
+        openPanel.canChooseDirectories = true
+        openPanel.prompt = "Add to Archive"
+        openPanel.message = "Select files and folders to compress"
+        guard openPanel.runModal() == .OK, !openPanel.urls.isEmpty else { return }
+
+        let sources = openPanel.urls
+
+        // Step 2: Choose where to save the ZIP
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.zip]
+        savePanel.nameFieldStringValue = "Archive.zip"
+        savePanel.prompt = "Create"
+        savePanel.message = "Save ZIP archive"
+        guard savePanel.runModal() == .OK, let destination = savePanel.url else { return }
+
+        // Step 3: Create the ZIP
+        do {
+            try ZipCreator.createZip(at: destination, from: sources)
+            // Open the newly created archive
+            document.open(url: destination)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Failed to create archive"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .critical
+            alert.runModal()
         }
     }
 }
