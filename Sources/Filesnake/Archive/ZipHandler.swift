@@ -68,4 +68,36 @@ final class ZipHandler: ArchiveHandler {
             throw ArchiveError.readFailed("Could not open ZIP: \(error.localizedDescription)")
         }
     }
+
+    /// Create a fresh ZIP at `destination` by packing each `relativePaths`
+    /// entry from `root`. Destination is overwritten if it already exists.
+    /// Missing files are skipped rather than failing the whole archive.
+    static func create(at destination: URL, root: URL, relativePaths: [String]) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destination.path) {
+            try fm.removeItem(at: destination)
+        }
+        let archive: Archive
+        do {
+            archive = try Archive(url: destination, accessMode: .create)
+        } catch {
+            throw ArchiveError.extractFailed(
+                "Could not create ZIP at \(destination.path): \(error.localizedDescription)"
+            )
+        }
+        for rel in relativePaths {
+            let source = root.appendingPathComponent(rel)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: source.path, isDirectory: &isDir), !isDir.boolValue else {
+                continue
+            }
+            do {
+                try archive.addEntry(with: rel, relativeTo: root, compressionMethod: .deflate)
+            } catch {
+                throw ArchiveError.extractFailed(
+                    "Failed adding \(rel) to new ZIP: \(error.localizedDescription)"
+                )
+            }
+        }
+    }
 }

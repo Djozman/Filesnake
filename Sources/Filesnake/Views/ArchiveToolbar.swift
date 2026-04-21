@@ -52,6 +52,14 @@ struct ArchiveToolbar: ToolbarContent {
                 }
                 .disabled(document.checked.isEmpty)
                 .help("Delete checked entries from the archive")
+            } else if document.format?.supportsRepackageAsZIP == true {
+                Button {
+                    document.deleteSelection()
+                } label: {
+                    Label("Save Without Checked\u{2026}", systemImage: "doc.badge.arrow.up")
+                }
+                .disabled(document.checked.isEmpty)
+                .help("Save a new ZIP with the checked entries removed. Original archive is not modified.")
             }
         }
     }

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class ArchiveDocument: ObservableObject {
@@ -209,9 +210,17 @@ final class ArchiveDocument: ObservableObject {
     }
 
     func deleteSelection() {
-        guard let handler, format?.supportsDeletion == true else {
-            lastError = "This archive type does not support deletion."; return
+        guard let handler, let format, !checked.isEmpty else { return }
+        if format.supportsDeletion {
+            deleteInPlace(handler: handler)
+        } else if format.supportsRepackageAsZIP {
+            repackageRemovingSelectionAsZIP(handler: handler, sourceFormat: format)
+        } else {
+            lastError = "This archive type does not support deletion."
         }
+    }
+
+    private func deleteInPlace(handler: ArchiveHandler) {
         let paths = checkedEntries.map { $0.path }
         let alert = NSAlert()
         alert.messageText = "Delete \(paths.count) entry(ies) from archive?"
@@ -230,6 +239,74 @@ final class ArchiveDocument: ObservableObject {
             self.checked = self.checked.filter { id in newEntries.contains { $0.id == id } }
             if let f = self.focused, !newEntries.contains(where: { $0.id == f }) { self.focused = nil }
         })
+    }
+
+    /// For read-only formats (e.g. RAR): extract everything the user didn't check,
+    /// repackage it as a brand-new ZIP at a user-chosen location, and open that.
+    /// The original archive is never modified.
+    private func repackageRemovingSelectionAsZIP(handler: ArchiveHandler, sourceFormat: ArchiveFormat) {
+        guard let sourceURL = archiveURL else { return }
+
+        let removedIDs = expandedDeletionSet()
+        let survivors = entries.filter { !removedIDs.contains($0.id) && !$0.isDirectory }
+        let removedCount = checkedEntries.count
+
+        guard !survivors.isEmpty else {
+            lastError = "Removing the checked entries would leave the archive empty. Aborted."
+            return
+        }
+
+        let confirm = NSAlert()
+        confirm.messageText = "Remove \(removedCount) entry(ies) and save as ZIP?"
+        confirm.informativeText = "\(sourceFormat.displayName) archives can't be edited in place. "
+            + "Filesnake will extract everything else and save a new ZIP. The original "
+            + sourceURL.lastPathComponent + " will not be modified."
+        confirm.addButton(withTitle: "Save As\u{2026}")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + "-edited.zip"
+        panel.message = "Save edited archive as ZIP"
+        guard panel.runModal() == .OK, var destURL = panel.url else { return }
+        if destURL.pathExtension.lowercased() != "zip" {
+            destURL = destURL.appendingPathExtension("zip")
+        }
+        guard destURL.standardizedFileURL != sourceURL.standardizedFileURL else {
+            lastError = "Refusing to overwrite the original archive. Choose a different path."
+            return
+        }
+
+        let survivorPaths = survivors.map { $0.path }
+        runBusy({
+            let fm = FileManager.default
+            let temp = fm.temporaryDirectory
+                .appendingPathComponent("Filesnake-repack-\(UUID().uuidString)", isDirectory: true)
+            try fm.createDirectory(at: temp, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: temp) }
+
+            try handler.extract(paths: survivorPaths, to: temp)
+            try ZipHandler.create(at: destURL, root: temp, relativePaths: survivorPaths)
+            return destURL
+        }, thenOnMain: { [weak self] newURL in
+            self?.open(url: newURL)
+        })
+    }
+
+    /// If a directory is checked, treat every descendant as also-removed.
+    private func expandedDeletionSet() -> Set<ArchiveEntry.ID> {
+        var ids: Set<ArchiveEntry.ID> = []
+        for e in checkedEntries {
+            ids.insert(e.id)
+            guard e.isDirectory else { continue }
+            let prefix = e.path.hasSuffix("/") ? e.path : e.path + "/"
+            for child in entries where child.path.hasPrefix(prefix) {
+                ids.insert(child.id)
+            }
+        }
+        return ids
     }
 
     func materializeForPreview(_ entry: ArchiveEntry) -> URL? {

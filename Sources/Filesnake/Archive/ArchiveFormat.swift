@@ -38,4 +38,10 @@ enum ArchiveFormat: String, CaseIterable {
 
     var supportsDeletion: Bool { self == .zip }
     var supportsRandomExtract: Bool { self == .zip || self == .tar || self == .tarGz }
+
+    /// Read-only formats we can "edit" by extracting survivors and repackaging as a new ZIP.
+    var supportsRepackageAsZIP: Bool { self == .rar }
+
+    /// Whether the UI should show a remove/delete button — either in-place or via repackage.
+    var canRemoveEntries: Bool { supportsDeletion || supportsRepackageAsZIP }
 }
