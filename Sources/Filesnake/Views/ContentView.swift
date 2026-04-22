@@ -208,9 +208,10 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             let subs = split.arrangedSubviews
             if sidebarVisible {
                 subs[0].isHidden = false
-                DispatchQueue.main.async {
-                    split.setPosition(Self.initialSidebar, ofDividerAt: 0)
+                if subs[0].frame.width < Self.sidebarMin {
+                    subs[0].frame.size.width = Self.initialSidebar
                 }
+                split.adjustSubviews()
             } else {
                 subs[0].isHidden = true
             }
@@ -223,15 +224,10 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             if previewVisible {
                 // Unhide first so NSSplitView counts it in layout.
                 subs[2].isHidden = false
-                DispatchQueue.main.async {
-                    let total = split.bounds.width
-                    guard total > 0 else { return }
-                    let leftW = subs[0].isHidden ? 0 : subs[0].frame.width
-                    let dT    = split.dividerThickness
-                    let desiredPos = total - Self.initialPreview - dT
-                    let minPos     = leftW + (leftW > 0 ? dT : 0) + Self.centerMin
-                    split.setPosition(max(desiredPos, minPos), ofDividerAt: 1)
+                if subs[2].frame.width < Self.previewMin {
+                    subs[2].frame.size.width = Self.initialPreview
                 }
+                split.adjustSubviews()
             } else {
                 subs[2].isHidden = true
             }
