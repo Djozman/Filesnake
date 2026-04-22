@@ -86,7 +86,7 @@ private final class InvisibleSplitView: NSSplitView {
         let dT = dividerThickness
         let subs = arrangedSubviews
         for i in 0..<(subs.count - 1) {
-            if isSubviewCollapsed(subs[i]) { continue }
+            if subs[i].isHidden { continue }
             let maxX = subs[i].frame.maxX
             let lo = maxX - hotZone
             let hi = maxX + dT + hotZone
@@ -110,7 +110,7 @@ private final class InvisibleSplitView: NSSplitView {
         let subs = arrangedSubviews
         let dT = dividerThickness
         for i in 0..<(subs.count - 1) {
-            if isSubviewCollapsed(subs[i]) { continue }
+            if subs[i].isHidden { continue }
             let maxX = subs[i].frame.maxX
             let zoneRect = NSRect(x: maxX - hotZone, y: 0, width: dT + hotZone * 2, height: bounds.height)
             let area = NSTrackingArea(rect: zoneRect,
@@ -212,10 +212,8 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
                     split.setPosition(Self.initialSidebar, ofDividerAt: 0)
                 }
             } else {
+                subs[0].isHidden = true
                 split.setPosition(0, ofDividerAt: 0)
-                DispatchQueue.main.async {
-                    subs[0].isHidden = true
-                }
             }
         }
 
@@ -236,11 +234,8 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
                     split.setPosition(max(desiredPos, minPos), ofDividerAt: 1)
                 }
             } else {
-                DispatchQueue.main.async {
-                    subs[2].isHidden = true
-                    // Reclaim the space: push divider 1 back to full width.
-                    split.setPosition(split.bounds.width, ofDividerAt: 1)
-                }
+                subs[2].isHidden = true
+                split.setPosition(split.bounds.width, ofDividerAt: 1)
             }
         }
     }
