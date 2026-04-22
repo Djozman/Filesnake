@@ -1,12 +1,13 @@
 import SwiftUI
 import AppKit
+import Combine
 
 // MARK: - SwiftUI wrapper
 
 struct ArchiveListView: View {
     @EnvironmentObject var document: ArchiveDocument
     var body: some View {
-        ArchiveNSTableBridge()
+        ArchiveNSTableBridge(document: document)
     }
 }
 
@@ -50,11 +51,17 @@ final class AccentRowView: NSTableRowView {
 final class NameCellView: NSTableCellView {
     /// Closure invoked when the disclosure triangle is clicked.
     var onToggleExpand: (() -> Void)?
+    /// Closure invoked when inline rename editing ends with the new name.
+    var onRenameCompleted: ((String) -> Void)?
+    /// The entry ID this cell currently represents (for rename tracking).
+    var entryID: ArchiveEntry.ID?
 
     private let disclosure = NSButton()
     private let iconView = NSImageView()
     private let nameField = NSTextField(labelWithString: "")
     private var leadingConstraint: NSLayoutConstraint!
+    private var renameOriginalName: String = ""
+    private var isRenaming: Bool = false
 
     private static let indentPerLevel: CGFloat = 14
     private static let disclosureSize: CGFloat = 14
@@ -85,8 +92,10 @@ final class NameCellView: NSTableCellView {
         nameField.lineBreakMode = .byTruncatingMiddle
         nameField.isBordered = false
         nameField.drawsBackground = false
-        nameField.isEditable = false
-        nameField.isSelectable = false
+        nameField.isEditable = true
+        nameField.isSelectable = true
+        nameField.focusRingType = .none
+        nameField.delegate = self
         textField = nameField
         addSubview(nameField)
 
@@ -118,11 +127,16 @@ final class NameCellView: NSTableCellView {
                    isDirectory: Bool,
                    isExpanded: Bool,
                    icon: NSImage?,
-                   name: String) {
+                   name: String,
+                   entryID: ArchiveEntry.ID? = nil) {
         leadingConstraint.constant = Self.baseLeading + CGFloat(depth) * Self.indentPerLevel
         iconView.image = icon
         nameField.stringValue = name
         nameField.textColor = .labelColor
+        nameField.isEditable = false // Only enable when rename is triggered
+        renameOriginalName = name
+        isRenaming = false
+        self.entryID = entryID
 
         if isDirectory {
             let symbol = isExpanded ? "chevron.down" : "chevron.right"
@@ -136,6 +150,40 @@ final class NameCellView: NSTableCellView {
             disclosure.toolTip = nil
             disclosure.isHidden = true
             disclosure.isEnabled = false
+        }
+    }
+
+    /// Programmatically start inline editing of the name field.
+    func beginRename() {
+        renameOriginalName = nameField.stringValue
+        isRenaming = true
+        nameField.isEditable = true
+        nameField.isSelectable = true
+        window?.makeFirstResponder(nameField)
+        // Select just the filename stem (before the last dot)
+        if let editor = nameField.currentEditor() {
+            let name = nameField.stringValue
+            if let dotRange = name.range(of: ".", options: .backwards),
+               dotRange.lowerBound != name.startIndex {
+                let stemLength = name.distance(from: name.startIndex, to: dotRange.lowerBound)
+                editor.selectedRange = NSRange(location: 0, length: stemLength)
+            } else {
+                editor.selectAll(nil)
+            }
+        }
+    }
+}
+
+extension NameCellView: NSTextFieldDelegate {
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard isRenaming else { return }
+        isRenaming = false
+        let newName = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        nameField.isEditable = false
+        guard !newName.isEmpty, newName != renameOriginalName else { return }
+        // Defer model mutation until AppKit has fully finished edit teardown.
+        DispatchQueue.main.async { [weak self] in
+            self?.onRenameCompleted?(newName)
         }
     }
 }
@@ -165,7 +213,9 @@ final class CenteredTableCellView: NSTableCellView {
 // MARK: - NSViewRepresentable
 
 struct ArchiveNSTableBridge: NSViewRepresentable {
-    @EnvironmentObject var document: ArchiveDocument
+    // NOT @EnvironmentObject — we pass this as a plain, unobserved reference
+    // so that @Published changes do NOT trigger SwiftUI's layout cycle.
+    let document: ArchiveDocument
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -184,6 +234,8 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         table.target = context.coordinator
         table.menu = NSMenu()
         table.menu?.delegate = context.coordinator
+        
+        table.setDraggingSourceOperationMask(.copy, forLocal: false)
 
         let checkCol = NSTableColumn(identifier: .init("check"))
         checkCol.title = ""; checkCol.width = 28; checkCol.minWidth = 28; checkCol.maxWidth = 28
@@ -221,54 +273,92 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         context.coordinator.scrollView = scroll
+
+        // Wire up the coordinator to observe the document via Combine
+        // — completely outside SwiftUI's layout cycle.
+        context.coordinator.bind(to: document)
+
         return scroll
     }
 
     func updateNSView(_ scrollView: NonFocusableScrollView, context: Context) {
-        let coord = context.coordinator
-        guard let table = scrollView.documentView as? FilesnakeTableView else { return }
+        // If the document object itself changed (e.g. environment swap),
+        // rebind. Otherwise this is a no-op — the Coordinator drives all
+        // table updates via its own Combine subscription.
+        if context.coordinator.document !== document {
+            context.coordinator.bind(to: document)
+        }
+    }
+}
 
-        let newRows = document.filteredDisplayRows
-        let oldRows = coord.rows
-        let oldExpanded = coord.expandedSnapshot
+// MARK: - Coordinator
+
+@MainActor
+final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
+
+    var rows: [ArchiveDocument.DisplayRow] = []
+    var checkedSnapshot: Set<ArchiveEntry.ID> = []
+    var expandedSnapshot: Set<String> = []
+    var folderPathSnapshot: String = ""
+    var searchSnapshot: String = ""
+    var document: ArchiveDocument?
+    var sortKey: ArchiveDocument.SortKey = .name
+    var sortAscending: Bool = true
+    weak var table: FilesnakeTableView?
+    weak var scrollView: NonFocusableScrollView?
+    private var cancellable: AnyCancellable?
+
+    /// Subscribe to the document's objectWillChange via Combine.
+    /// All table updates happen here — completely outside SwiftUI's layout cycle.
+    func bind(to doc: ArchiveDocument) {
+        document = doc
+        // Seed initial state
+        syncTable()
+        // Subscribe: each @Published change fires objectWillChange,
+        // we coalesce and sync on the next runloop tick.
+        cancellable = doc.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.syncTable()
+            }
+    }
+
+    /// Diff the document state vs our snapshots and update the table.
+    private func syncTable() {
+        guard let doc = document, let table else { return }
+
+        let newRows = doc.filteredDisplayRows
+        let oldRows = rows
+        let oldExpanded = expandedSnapshot
 
         let rowIdsChanged = oldRows.map(\.id) != newRows.map(\.id)
         let depthsChanged = oldRows.map(\.depth) != newRows.map(\.depth)
-        let checkedChanged = coord.checkedSnapshot != document.checked
-        let expandedChanged = oldExpanded != document.expandedFolders
-        let sortChanged = coord.sortKey != document.sortKey
-            || coord.sortAscending != document.sortAscending
-        let folderPathChanged = coord.folderPathSnapshot != document.currentFolderPath
-        let searchChanged = coord.searchSnapshot != document.searchText
+        let checkedChanged = checkedSnapshot != doc.checked
+        let expandedChanged = oldExpanded != doc.expandedFolders
+        let sortChanged_ = sortKey != doc.sortKey || sortAscending != doc.sortAscending
+        let folderPathChanged = folderPathSnapshot != doc.currentFolderPath
+        let searchChanged = searchSnapshot != doc.searchText
 
-        // Commit the new snapshots before mutating the table, so any
-        // callbacks that fire mid-animation see the current state.
-        coord.rows = newRows
-        coord.checkedSnapshot = document.checked
-        coord.expandedSnapshot = document.expandedFolders
-        coord.document = document
-        coord.sortKey = document.sortKey
-        coord.sortAscending = document.sortAscending
-        coord.folderPathSnapshot = document.currentFolderPath
-        coord.searchSnapshot = document.searchText
+        // Commit snapshots
+        rows = newRows
+        checkedSnapshot = doc.checked
+        expandedSnapshot = doc.expandedFolders
+        sortKey = doc.sortKey
+        sortAscending = doc.sortAscending
+        folderPathSnapshot = doc.currentFolderPath
+        searchSnapshot = doc.searchText
 
-        // Expansion-only delta → animate insert/remove. Everything else →
-        // hard reload (navigation, sort, search, open, etc.).
         let onlyExpansionDelta = expandedChanged
-            && !folderPathChanged
-            && !searchChanged
-            && !sortChanged
-            && !checkedChanged
-            && rowIdsChanged
+            && !folderPathChanged && !searchChanged
+            && !sortChanged_ && !checkedChanged && rowIdsChanged
 
         if onlyExpansionDelta {
             animateExpansionDiff(table: table, oldRows: oldRows, newRows: newRows,
-                                 oldExpanded: oldExpanded,
-                                 newExpanded: document.expandedFolders)
+                                oldExpanded: oldExpanded, newExpanded: doc.expandedFolders)
         } else if rowIdsChanged || depthsChanged || checkedChanged
-                    || expandedChanged || sortChanged {
+                    || expandedChanged || sortChanged_ {
             table.reloadData()
-            updateSortIndicators(table: table, key: document.sortKey, ascending: document.sortAscending)
+            updateSortIndicators(table: table, key: doc.sortKey, ascending: doc.sortAscending)
         }
     }
 
@@ -286,8 +376,8 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
             case .remove(let offset, _, _): removals.insert(offset)
             }
         }
+        let toggledPaths = oldExpanded.symmetricDifference(newExpanded)
 
-        // Finder-style: new rows slide down, removed rows slide up, both fade.
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.22
             ctx.allowsImplicitAnimation = true
@@ -301,8 +391,6 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
             table.endUpdates()
         }
 
-        // Flip the chevron on the folder(s) whose expanded state just changed.
-        let toggledPaths = oldExpanded.symmetricDifference(newExpanded)
         if !toggledPaths.isEmpty {
             var parentRows = IndexSet()
             for (idx, row) in newRows.enumerated()
@@ -338,23 +426,6 @@ struct ArchiveNSTableBridge: NSViewRepresentable {
             }
         }
     }
-}
-
-// MARK: - Coordinator
-
-@MainActor
-final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
-
-    var rows: [ArchiveDocument.DisplayRow] = []
-    var checkedSnapshot: Set<ArchiveEntry.ID> = []
-    var expandedSnapshot: Set<String> = []
-    var folderPathSnapshot: String = ""
-    var searchSnapshot: String = ""
-    var document: ArchiveDocument?
-    var sortKey: ArchiveDocument.SortKey = .name
-    var sortAscending: Bool = true
-    weak var table: FilesnakeTableView?
-    weak var scrollView: NonFocusableScrollView?
 
     private func entry(at row: Int) -> ArchiveEntry? {
         guard row >= 0, row < rows.count else { return nil }
@@ -364,6 +435,49 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     // MARK: DataSource
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+    
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        guard let entry = entry(at: row) else { return nil }
+        let fileType = "public.data" 
+        let provider = NSFilePromiseProvider(fileType: fileType, delegate: self)
+        provider.userInfo = ["entryID": entry.id]
+        return provider
+    }
+    
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
+        session.enumerateDraggingItems(options: [], for: nil, classes: [NSFilePromiseProvider.self]) { draggingItem, idx, stop in
+            if let provider = draggingItem.item as? NSFilePromiseProvider,
+               let userInfo = provider.userInfo as? [String: Any],
+               let entryID = userInfo["entryID"] as? ArchiveEntry.ID,
+               let entry = self.document?.entries.first(where: { $0.id == entryID }) {
+                
+                let icon = FileIcon.icon(for: entry) ?? NSWorkspace.shared.icon(for: .data)
+                
+                let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+                let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+                let str = NSAttributedString(string: entry.name, attributes: attrs)
+                let textRect = str.boundingRect(with: NSSize(width: 250, height: CGFloat.greatestFiniteMagnitude), options: .usesLineFragmentOrigin)
+                
+                let padding: CGFloat = 6
+                let iconSize: CGFloat = 24
+                let imageSize = NSSize(width: padding + iconSize + padding + textRect.width + padding, height: max(iconSize + padding*2, textRect.height + padding*2))
+                
+                let dragImage = NSImage(size: imageSize)
+                dragImage.lockFocus()
+                
+                let path = NSBezierPath(roundedRect: NSRect(origin: .zero, size: imageSize), xRadius: 8, yRadius: 8)
+                NSColor.black.withAlphaComponent(0.6).setFill()
+                path.fill()
+                
+                icon.draw(in: NSRect(x: padding, y: (imageSize.height - iconSize) / 2, width: iconSize, height: iconSize))
+                str.draw(in: NSRect(x: padding + iconSize + padding, y: (imageSize.height - textRect.height) / 2, width: textRect.width, height: textRect.height))
+                
+                dragImage.unlockFocus()
+                
+                draggingItem.setDraggingFrame(NSRect(origin: draggingItem.draggingFrame.origin, size: imageSize), contents: dragImage)
+            }
+        }
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard row < rows.count else { return nil }
@@ -407,9 +521,13 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 isDirectory: entry.isDirectory,
                 isExpanded: expanded,
                 icon: FileIcon.icon(for: entry),
-                name: entry.name)
+                name: entry.name,
+                entryID: entry.id)
             cell.onToggleExpand = { [weak self] in
                 self?.document?.toggleExpanded(entry)
+            }
+            cell.onRenameCompleted = { [weak self] newName in
+                self?.document?.renameEntry(entry.id, newName: newName)
             }
             return cell
 
@@ -538,6 +656,14 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
                 enter.representedObject = solo; enter.target = self
                 menu.addItem(enter)
             }
+
+            // Rename (single item only, on mutable formats)
+            if doc.format?.supportsRename == true {
+                let ri = NSMenuItem(title: "Rename\u{2026}",
+                                    action: #selector(menuRename(_:)), keyEquivalent: "")
+                ri.representedObject = solo; ri.target = self
+                menu.addItem(ri)
+            }
         }
 
         menu.addItem(.separator())
@@ -660,6 +786,18 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     }
     @objc func menuDeleteChecked(_ sender: NSMenuItem) { document?.deleteSelection() }
 
+    @objc func menuRename(_ sender: NSMenuItem) {
+        guard let entry = sender.representedObject as? ArchiveEntry,
+              let table else { return }
+        // Find the row for this entry and trigger inline editing
+        guard let rowIdx = rows.firstIndex(where: { $0.entry.id == entry.id }) else { return }
+        let nameColIdx = table.column(withIdentifier: NSUserInterfaceItemIdentifier("name"))
+        guard nameColIdx >= 0 else { return }
+        if let cell = table.view(atColumn: nameColIdx, row: rowIdx, makeIfNecessary: false) as? NameCellView {
+            cell.beginRename()
+        }
+    }
+
     // MARK: Cell builders
 
     private func centeredCell(_ text: String, id: String, in tableView: NSTableView) -> NSTableCellView {
@@ -673,5 +811,41 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
         }
         cell.textField?.stringValue = text
         return cell
+    }
+}
+
+// MARK: - Drag and Drop (NSFilePromiseProviderDelegate)
+
+extension Coordinator: NSFilePromiseProviderDelegate {
+    nonisolated func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
+        let fetchName: @MainActor () -> String = {
+            guard let userInfo = filePromiseProvider.userInfo as? [String: Any],
+                  let entryID = userInfo["entryID"] as? ArchiveEntry.ID,
+                  let doc = self.document,
+                  let entry = doc.entries.first(where: { $0.id == entryID }) else {
+                return "Unknown"
+            }
+            return entry.name
+        }
+        
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { fetchName() }
+        } else {
+            return DispatchQueue.main.sync {
+                MainActor.assumeIsolated { fetchName() }
+            }
+        }
+    }
+    
+    nonisolated func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping @Sendable (Error?) -> Void) {
+        Task { @MainActor in
+            guard let userInfo = filePromiseProvider.userInfo as? [String: Any],
+                  let entryID = userInfo["entryID"] as? ArchiveEntry.ID,
+                  let doc = self.document else {
+                completionHandler(ArchiveError.notFound("Invalid drag state"))
+                return
+            }
+            doc.extractDragItem(entryID: entryID, to: url, completion: completionHandler)
+        }
     }
 }

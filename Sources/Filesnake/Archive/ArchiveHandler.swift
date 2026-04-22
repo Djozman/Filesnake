@@ -1,6 +1,6 @@
 import Foundation
 
-protocol ArchiveHandler {
+protocol ArchiveHandler: Sendable {
     var format: ArchiveFormat { get }
     var url: URL { get }
 

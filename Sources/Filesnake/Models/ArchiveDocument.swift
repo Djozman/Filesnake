@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import ZIPFoundation
 
 @MainActor
 final class ArchiveDocument: ObservableObject {
@@ -18,6 +19,9 @@ final class ArchiveDocument: ObservableObject {
     @Published var focused: ArchiveEntry.ID?
     @Published var searchText: String = ""
     @Published private(set) var isBusy: Bool = false
+    /// Non-nil while a save is in progress; value is 0.0 – 1.0 progress.
+    @Published private(set) var saveProgress: Double? = nil
+    @Published private(set) var saveStatusText: String = ""
     @Published var lastError: String?
     /// URL of a file selected in sidebar favorites (for preview pane)
     @Published var sidebarPreviewURL: URL?
@@ -40,24 +44,33 @@ final class ArchiveDocument: ObservableObject {
     private var handler: ArchiveHandler?
     private var previewCacheDir: URL?
 
-    // MARK: - Indices (rebuilt once per `entries` change, used for O(1) lookups)
+    /// Whether the user has made unsaved modifications (deletes, renames).
+    @Published private(set) var isDirty: Bool = false
+    /// Snapshot of the entries as they were at the last save/open.
+    /// Used to compute which original paths need extracting on save.
+    private var originalEntries: [ArchiveEntry] = []
+    /// The original format of the archive before any modifications.
+    private var originalFormat: ArchiveFormat?
+
+    // MARK: - Indices (rebuilt once per `entries` change via buildIndices())
 
     /// Bumped every time `entries` is replaced, used as cache-invalidation key.
     private var entriesEpoch: Int = 0
     /// O(1) lookup by entry ID.
     private var entriesByID: [ArchiveEntry.ID: ArchiveEntry] = [:]
-    /// Direct children of a directory prefix. Root is the empty string.
-    /// Values are already sorted by the current sort order at build-time, but
-    /// the sort-specific cache is maintained separately below.
+    /// Direct children of a directory prefix. Key is "" for root, "a/b/" for subdirs.
     private var childrenByDirKey: [String: [ArchiveEntry]] = [:]
     /// Precomputed recursive uncompressed size per directory prefix.
     private var folderSizeByPath: [String: UInt64] = [:]
     /// Precomputed recursive compressed size per directory prefix.
-    private var folderCompressedSizeByPath: [String: UInt64] = [:]
+    private var folderCompressedByPath: [String: UInt64] = [:]
     /// Precomputed set of file-entry IDs per directory prefix.
     private var folderFileIDsByPath: [String: Set<ArchiveEntry.ID>] = [:]
     /// Cached check-state per folder entry. Invalidated when `checked` changes.
     private var folderCheckStateCache: [ArchiveEntry.ID: FolderCheckState] = [:]
+    /// Precomputed total file count and size for stats.
+    private var cachedFileCount: Int = 0
+    private var cachedTotalSize: UInt64 = 0
 
     // MARK: - Display-row memoization
 
@@ -81,11 +94,72 @@ final class ArchiveDocument: ObservableObject {
         case unchecked, mixed, checked
     }
 
+    // MARK: - Index building (single O(N) pass)
+
+    /// Rebuilds all lookup indices from `entries`. Called once per open/reload.
+    private func buildIndices() {
+        entriesEpoch += 1
+        entriesByID.removeAll(keepingCapacity: true)
+        childrenByDirKey.removeAll(keepingCapacity: true)
+        folderSizeByPath.removeAll(keepingCapacity: true)
+        folderCompressedByPath.removeAll(keepingCapacity: true)
+        folderFileIDsByPath.removeAll(keepingCapacity: true)
+        folderCheckStateCache.removeAll(keepingCapacity: true)
+        cachedDisplaySig = nil
+        cachedFilteredSig = nil
+
+        var fileCount = 0
+        var totalSize: UInt64 = 0
+
+        entriesByID.reserveCapacity(entries.count)
+
+        for entry in entries {
+            entriesByID[entry.id] = entry
+
+            // Build childrenByDirKey: determine the parent directory key.
+            let parentKey: String
+
+            if entry.isDirectory {
+                // "a/b/" → strip trailing slash → "a/b" → find last slash → "a/"
+                let trimmed = entry.path.hasSuffix("/") ? String(entry.path.dropLast()) : entry.path
+                if let lastSlash = trimmed.lastIndex(of: "/") {
+                    parentKey = String(trimmed[...lastSlash])
+                } else {
+                    parentKey = ""
+                }
+            } else {
+                // "a/b/file.txt" → find last slash → "a/b/"
+                if let lastSlash = entry.path.lastIndex(of: "/") {
+                    parentKey = String(entry.path[...lastSlash])
+                } else {
+                    parentKey = ""
+                }
+            }
+            childrenByDirKey[parentKey, default: []].append(entry)
+
+            if !entry.isDirectory {
+                fileCount += 1
+                totalSize += entry.uncompressedSize
+
+                // Accumulate folder sizes for every ancestor.
+                var path = entry.path
+                while let slashRange = path.range(of: "/", options: .backwards) {
+                    let dirKey = String(path[..<slashRange.upperBound])
+                    folderSizeByPath[dirKey, default: 0] += entry.uncompressedSize
+                    folderCompressedByPath[dirKey, default: 0] += entry.compressedSize
+                    folderFileIDsByPath[dirKey, default: []].insert(entry.id)
+                    path = String(path[..<slashRange.lowerBound])
+                }
+            }
+        }
+
+        cachedFileCount = fileCount
+        cachedTotalSize = totalSize
+    }
+
     // MARK: - Computed lists
 
     /// Direct children of a directory prefix (O(1) dictionary hit).
-    /// `prefix` is the normalized directory key: `""` for root,
-    /// `"a/b/"` for a subdirectory.
     private func entriesAtLevel(_ prefix: String) -> [ArchiveEntry] {
         childrenByDirKey[prefix] ?? []
     }
@@ -151,12 +225,12 @@ final class ArchiveDocument: ObservableObject {
     }
 
     var checkedEntries: [ArchiveEntry] {
-        entries.filter { checked.contains($0.id) }
+        checked.compactMap { entriesByID[$0] }
     }
 
     var currentEntry: ArchiveEntry? {
         guard let id = focused else { return nil }
-        return entries.first { $0.id == id }
+        return entriesByID[id]
     }
 
     // MARK: - Folder expansion
@@ -181,30 +255,18 @@ final class ArchiveDocument: ObservableObject {
         return trimmed.split(separator: "/").map(String.init)
     }
 
-    // MARK: - Folder sizes
+    // MARK: - Folder sizes (O(1) from precomputed indices)
 
     /// Recursive uncompressed size of all files inside a directory entry.
     func folderSize(for entry: ArchiveEntry) -> UInt64 {
         guard entry.isDirectory else { return entry.uncompressedSize }
-        let key = normalizedDirectoryPath(for: entry.path)
-        if let cached = folderSizeCache[key] { return cached }
-        let size = entries
-            .filter { !$0.isDirectory && $0.path.hasPrefix(key) }
-            .reduce(UInt64(0)) { $0 + $1.uncompressedSize }
-        folderSizeCache[key] = size
-        return size
+        return folderSizeByPath[normalizedDirectoryPath(for: entry.path)] ?? 0
     }
 
     /// Recursive compressed size of all files inside a directory entry.
     func folderCompressedSize(for entry: ArchiveEntry) -> UInt64 {
         guard entry.isDirectory else { return entry.compressedSize }
-        let key = normalizedDirectoryPath(for: entry.path)
-        if let cached = folderCompressedSizeCache[key] { return cached }
-        let size = entries
-            .filter { !$0.isDirectory && $0.path.hasPrefix(key) }
-            .reduce(UInt64(0)) { $0 + $1.compressedSize }
-        folderCompressedSizeCache[key] = size
-        return size
+        return folderCompressedByPath[normalizedDirectoryPath(for: entry.path)] ?? 0
     }
 
     // MARK: - Navigation
@@ -238,7 +300,7 @@ final class ArchiveDocument: ObservableObject {
     }
 
     func toggleChecked(_ id: ArchiveEntry.ID) {
-        guard let entry = entries.first(where: { $0.id == id }) else { return }
+        guard let entry = entriesByID[id] else { return }
         let current = folderCheckState(entry)
         // .mixed behaves like .unchecked on click — promote to fully checked,
         // matching standard macOS tri-state checkbox behavior.
@@ -249,7 +311,7 @@ final class ArchiveDocument: ObservableObject {
     /// Bulk set for a list of entries (used by right-click menu). Propagates
     /// through file descendants when any entry is a directory.
     func setChecked(_ value: Bool, forIDs ids: [ArchiveEntry.ID]) {
-        let targets = ids.compactMap { id in entries.first(where: { $0.id == id }) }
+        let targets = ids.compactMap { entriesByID[$0] }
         applyChecked(value, to: targets)
     }
 
@@ -269,18 +331,9 @@ final class ArchiveDocument: ObservableObject {
         checked = updated  // single @Published notification
     }
 
-    /// Set of file-entry IDs under a folder path. Cached for perf on huge
-    /// archives (a single subset check can otherwise scan 100k+ entries).
+    /// Set of file-entry IDs under a folder path (O(1) from precomputed index).
     private func fileDescendantIDs(of folder: ArchiveEntry) -> Set<ArchiveEntry.ID> {
-        let key = normalizedDirectoryPath(for: folder.path)
-        if let cached = folderFileIDsCache[key] { return cached }
-        var ids: Set<ArchiveEntry.ID> = []
-        ids.reserveCapacity(64)
-        for entry in entries where !entry.isDirectory && entry.path.hasPrefix(key) {
-            ids.insert(entry.id)
-        }
-        folderFileIDsCache[key] = ids
-        return ids
+        folderFileIDsByPath[normalizedDirectoryPath(for: folder.path)] ?? []
     }
 
     func checkAllVisible() {
@@ -332,50 +385,118 @@ final class ArchiveDocument: ObservableObject {
     }
 
     var stats: (count: Int, totalSize: UInt64) {
-        let files = entries.filter { !$0.isDirectory }
-        return (files.count, files.reduce(0) { $0 + $1.uncompressedSize })
+        (cachedFileCount, cachedTotalSize)
     }
 
     // MARK: - Open / Close
 
-    func open(url: URL) {
+    func open(url: URL, completion: (@MainActor @Sendable () -> Void)? = nil) {
+        // If the current archive has unsaved changes, prompt to save first.
+        if isDirty {
+            let result = promptSaveChanges()
+            switch result {
+            case .save:     saveArchive()
+            case .dontSave: break
+            case .cancel:   return
+            }
+        }
+        // Clean up old state without prompting again
+        if let dir = previewCacheDir { try? FileManager.default.removeItem(at: dir) }
+        handler = nil
+
+        // Show the spinner while the archive loads
         isBusy = true
-        defer { isBusy = false }
-        do {
-            let newHandler = try ArchiveHandlerFactory.make(url: url)
-            let newEntries = try newHandler.list()
-            // Clean up old preview cache
-            if let dir = previewCacheDir { try? FileManager.default.removeItem(at: dir) }
-            // Atomically swap state — no flash to empty
-            self.handler = newHandler
-            self.archiveURL = url
-            self.format = newHandler.format
-            self.entries = newEntries
-            self.checked = []
-            self.focused = nil
-            self.searchText = ""
-            self.currentFolderPath = ""
-            self.expandedFolders = []
-            self.folderSizeCache = [:]
-            self.folderCompressedSizeCache = [:]
-            self.folderFileIDsCache = [:]
-            self.folderCheckStateCache = [:]
-            self.previewCacheDir = makePreviewCacheDir(for: url)
-            self.sidebarPreviewURL = nil
-        } catch {
-            lastError = error.localizedDescription
+        let newURL = url
+        let box = WeakBox(self)
+        Task.detached {
+            do {
+                let newHandler = try ArchiveHandlerFactory.make(url: newURL)
+                let rawEntries = try newHandler.list()
+                // Drop macOS metadata noise that Finder's "Compress" silently
+                // injects: __MACOSX/ (AppleDouble resource forks), ._* sidecars,
+                // and .DS_Store files. These are never useful to preserve, they
+                // confuse rename (only the visible entry gets renamed while
+                // the shadow entry keeps the old name), and they show up as
+                // hidden junk when the zip is re-extracted.
+                let newEntries = rawEntries.filter {
+                    !ArchiveDocument.isMacMetadataPath($0.path)
+                }
+                await MainActor.run {
+                    guard let self = box.value else { return }
+                    self.handler = newHandler
+                    self.archiveURL = newURL
+                    self.format = newHandler.format
+                    self.originalFormat = newHandler.format
+                    self.entries = newEntries
+                    self.originalEntries = newEntries
+                    // Stay clean on open even if we stripped metadata. The
+                    // on-disk archive still contains the junk; we just don't
+                    // surface it. If the user later edits and saves, the
+                    // cleaned set is what gets written. If they never save,
+                    // the archive stays untouched.
+                    self.isDirty = false
+                    self.checked = []
+                    self.focused = nil
+                    self.searchText = ""
+                    self.currentFolderPath = ""
+                    self.expandedFolders = []
+                    self.previewCacheDir = self.makePreviewCacheDir(for: newURL)
+                    self.sidebarPreviewURL = nil
+                    self.buildIndices()
+                    self.isBusy = false
+                    completion?()
+                }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run {
+                    box.value?.lastError = msg
+                    box.value?.isBusy = false
+                    completion?()
+                }
+            }
         }
     }
 
-    func close() {
+    /// Returns true if close proceeded, false if the user cancelled.
+    @discardableResult
+    func close() -> Bool {
+        if isDirty {
+            let result = promptSaveChanges()
+            switch result {
+            case .save:
+                saveArchive()
+            case .dontSave:
+                break // discard
+            case .cancel:
+                return false
+            }
+        }
         handler = nil; archiveURL = nil; format = nil
-        entries = []; checked = []; focused = nil
+        originalFormat = nil
+        entries = []; originalEntries = []; checked = []; focused = nil
         searchText = ""; currentFolderPath = ""
-        expandedFolders = []
-        folderSizeCache = [:]; folderCompressedSizeCache = [:]
-        folderFileIDsCache = [:]; folderCheckStateCache = [:]
+        expandedFolders = []; isDirty = false
         if let dir = previewCacheDir { try? FileManager.default.removeItem(at: dir) }
         previewCacheDir = nil
+        buildIndices()
+        return true
+    }
+
+    enum SavePromptResult { case save, dontSave, cancel }
+
+    private func promptSaveChanges() -> SavePromptResult {
+        let alert = NSAlert()
+        alert.messageText = "Save changes to \"\(archiveURL?.lastPathComponent ?? "archive")\"?"
+        alert.informativeText = "Your changes will be lost if you don\u{2019}t save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don\u{2019}t Save")
+        alert.addButton(withTitle: "Cancel")
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn:  return .save
+        case .alertSecondButtonReturn: return .dontSave
+        default:                       return .cancel
+        }
     }
 
     // MARK: - Extract / Delete
@@ -386,24 +507,34 @@ final class ArchiveDocument: ObservableObject {
         panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.prompt = "Extract Here"; panel.message = "Choose a destination folder"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
-        let paths = checkedEntries.filter { !$0.isDirectory }.map { $0.path }
-        runBusy({ try handler.extract(paths: paths, to: dest) },
-                thenOnMain: { NSWorkspace.shared.open(dest) })
+        let fileEntries = checkedEntries.filter { !$0.isDirectory }
+        extractEntries(fileEntries, to: dest, using: handler)
     }
 
     func extractPaths(_ paths: [String], to dest: URL) {
         guard let handler else { return }
-        runBusy({ try handler.extract(paths: paths, to: dest) },
-                thenOnMain: { NSWorkspace.shared.open(dest) })
+        // Find entries matching these paths
+        let matching = entries.filter { paths.contains($0.path) && !$0.isDirectory }
+        let rebasePrefix = currentFolderPath
+        extractEntries(
+            matching,
+            to: dest,
+            using: handler,
+            outputPath: { entry in
+                guard !rebasePrefix.isEmpty, entry.path.hasPrefix(rebasePrefix) else {
+                    return entry.path
+                }
+                return String(entry.path.dropFirst(rebasePrefix.count))
+            }
+        )
     }
 
     /// Extract checked entries to a preset destination (no dialog).
     func extractCheckedTo(_ dest: URL) {
         guard let handler, !checked.isEmpty else { return }
-        let paths = checkedEntries.filter { !$0.isDirectory }.map { $0.path }
-        guard !paths.isEmpty else { return }
-        runBusy({ try handler.extract(paths: paths, to: dest) },
-                thenOnMain: { NSWorkspace.shared.open(dest) })
+        let fileEntries = checkedEntries.filter { !$0.isDirectory }
+        guard !fileEntries.isEmpty else { return }
+        extractEntries(fileEntries, to: dest, using: handler)
     }
 
     func extractAll() {
@@ -412,107 +543,622 @@ final class ArchiveDocument: ObservableObject {
         panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.prompt = "Extract Here"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
-        let paths = entries.filter { !$0.isDirectory }.map { $0.path }
-        runBusy({ try handler.extract(paths: paths, to: dest) },
-                thenOnMain: { NSWorkspace.shared.open(dest) })
+        let fileEntries = entries.filter { !$0.isDirectory }
+        extractEntries(fileEntries, to: dest, using: handler)
+    }
+
+    func extractEntries(
+        _ entriesToExtract: [ArchiveEntry],
+        to dest: URL,
+        using handler: ArchiveHandler,
+        outputPath: @escaping @Sendable (ArchiveEntry) -> String = { $0.path },
+        completion: (@MainActor @Sendable (Bool) -> Void)? = nil
+    ) {
+        let originalPaths = entriesToExtract.map(\.originalPath)
+        let box = WeakBox(self)
+        // Snapshot the (non-Sendable) outputPath closure into a Sendable-by-value
+        // array, keyed by entry ID, so the @Sendable work closure doesn't have
+        // to capture a non-Sendable function reference.
+        let outputPaths: [ArchiveEntry.ID: String] = Dictionary(
+            uniqueKeysWithValues: entriesToExtract.map { ($0.id, outputPath($0)) })
+        runBusy({
+            // FileManager.default is a shared reference — access it fresh
+            // inside this @Sendable closure rather than capturing a local
+            // `fm` that Swift 6 flags as non-Sendable capture.
+            let tmpDir = dest.appendingPathComponent(".filesnake-extract-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+            let totalBytes = entriesToExtract.reduce(0) { $0 + $1.uncompressedSize }
+            
+            // Start a detached task to monitor directory size and update progress
+            let progressTask = Task.detached {
+                while !Task.isCancelled {
+                    let currentSize = ArchiveDocument.directorySize(url: tmpDir)
+                    await MainActor.run {
+                        if Task.isCancelled { return }
+                        let prog = totalBytes > 0 ? Double(currentSize) / Double(totalBytes) : 1.0
+                        // Keep progress between 0 and 0.99 until really done
+                        box.value?.saveProgress = min(prog, 0.99)
+                        
+                        let extractedStr = ArchiveDocument.formatBytes(currentSize)
+                        let totalStr = ArchiveDocument.formatBytes(totalBytes)
+                        box.value?.saveStatusText = "Extracting\u{2026} \(extractedStr) of \(totalStr)"
+                    }
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                }
+            }
+            
+            defer {
+                progressTask.cancel()
+                try? FileManager.default.removeItem(at: tmpDir)
+            }
+
+            // 1. Extract everything to the temporary directory using original paths
+            try handler.extract(paths: originalPaths, to: tmpDir)
+
+            progressTask.cancel()
+            Task { @MainActor in box.value?.saveProgress = 1.0 }
+
+            // 2. Identify top-level components of the requested output paths
+            var topLevelPaths = Set<String>()
+            for e in entriesToExtract {
+                let outPath = outputPaths[e.id] ?? e.path
+                let firstComponent = outPath.split(separator: "/").first.map(String.init) ?? outPath
+                topLevelPaths.insert(firstComponent)
+            }
+
+            // 3. Resolve collisions for each top-level item at the destination
+            // `let` binding: the rename map is built here and then only read
+            // from the per-entry move loop below. Declaring it `let` (vs.
+            // `var` + mutation inside the loop) keeps Swift 6 strict
+            // concurrency happy — no captured-var-in-@Sendable-closure.
+            let topLevelRenameMap: [String: String] = {
+                var map = [String: String]()
+                for top in topLevelPaths {
+                    let desiredDst = dest.appendingPathComponent(top)
+                    let finalDst = ArchiveDocument.uniqueURL(for: desiredDst)
+                    map[top] = finalDst.lastPathComponent
+                }
+                return map
+            }()
+
+            // 4. Move files from tmpDir to dest, applying the top-level rename
+            let fileManager = FileManager.default
+            for e in entriesToExtract {
+                let src = tmpDir.appendingPathComponent(e.originalPath)
+                guard fileManager.fileExists(atPath: src.path) else { continue }
+
+                let outPath = outputPaths[e.id] ?? e.path
+                var components = outPath.split(separator: "/").map(String.init)
+                if let first = components.first, let newFirst = topLevelRenameMap[first] {
+                    components[0] = newFirst
+                }
+
+                let remappedOutPath = components.joined(separator: "/")
+                let finalDst = dest.appendingPathComponent(remappedOutPath)
+
+                try fileManager.createDirectory(at: finalDst.deletingLastPathComponent(), withIntermediateDirectories: true)
+                // If it's a directory, we don't need to move it if it's empty, but we'll ensure the dir exists
+                if e.isDirectory {
+                    try fileManager.createDirectory(at: finalDst, withIntermediateDirectories: true)
+                } else {
+                    if fileManager.fileExists(atPath: finalDst.path) { try fileManager.removeItem(at: finalDst) }
+                    try fileManager.moveItem(at: src, to: finalDst)
+                }
+            }
+        }, thenOnMain: { result in
+            switch result {
+            case .success:
+                completion?(true)
+            case .failure(let error):
+                // Ensure completion is called even on failure so the HUD does not hang
+                completion?(false)
+                print("Extraction error: \(error.localizedDescription)")
+            }
+        })
+    }
+    
+    /// Extracts a specific dragged item to a URL provided by Finder via NSFilePromiseProvider.
+    func extractDragItem(entryID: ArchiveEntry.ID, to targetURL: URL, completion: @escaping @Sendable (Error?) -> Void) {
+        guard let handler else {
+            completion(ArchiveError.readFailed("No handler"))
+            return
+        }
+        
+        guard let entry = entries.first(where: { $0.id == entryID }) else {
+            completion(ArchiveError.notFound("Entry not found"))
+            return
+        }
+        
+        let prefix = entry.isDirectory ? (entry.path.hasSuffix("/") ? entry.path : entry.path + "/") : entry.path
+        let matching = entries.filter { !$0.isDirectory && ($0.path == entry.path || $0.path.hasPrefix(prefix)) }
+        let originalPaths = matching.map(\.originalPath)
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let fm = FileManager.default
+                // For drag & drop, we must use the targetURL's volume for the tmpDir
+                // so we don't cross volumes when doing the moveItem.
+                let tmpDir = targetURL.deletingLastPathComponent().appendingPathComponent(".filesnake-drag-\(UUID().uuidString)")
+                try fm.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+                defer { try? fm.removeItem(at: tmpDir) }
+                
+                try handler.extract(paths: originalPaths, to: tmpDir)
+                
+                for e in matching {
+                    let src = tmpDir.appendingPathComponent(e.originalPath)
+                    guard fm.fileExists(atPath: src.path) else { continue }
+                    
+                    let relativePath: String
+                    if entry.isDirectory {
+                        relativePath = String(e.path.dropFirst(prefix.count))
+                    } else {
+                        relativePath = ""
+                    }
+                    
+                    let finalDst = relativePath.isEmpty ? targetURL : targetURL.appendingPathComponent(relativePath)
+                    try fm.createDirectory(at: finalDst.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    
+                    if fm.fileExists(atPath: finalDst.path) {
+                        try fm.removeItem(at: finalDst)
+                    }
+                    try fm.moveItem(at: src, to: finalDst)
+                }
+                completion(nil)
+            } catch {
+                completion(error)
+            }
+        }
+    }
+
+    /// Finds an available URL by appending a number if the file already exists (e.g., "file 2.txt")
+    nonisolated private static func uniqueURL(for url: URL) -> URL {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return url }
+        
+        let dir = url.deletingLastPathComponent()
+        let ext = url.pathExtension
+        let base = url.deletingPathExtension().lastPathComponent
+        
+        var counter = 2
+        var newURL = url
+        while fm.fileExists(atPath: newURL.path) {
+            let newName = ext.isEmpty ? "\(base) \(counter)" : "\(base) \(counter).\(ext)"
+            newURL = dir.appendingPathComponent(newName)
+            counter += 1
+        }
+        return newURL
+    }
+
+    /// If all selected paths share the same top-level folder, returns that
+    /// folder prefix (e.g. "claude/") so extraction can be rebased to the
+    /// exact selected subtree ("monkey/..."), not wrapped in archive root.
+    private func commonTopLevelPrefix(for paths: [String]) -> String? {
+        guard let first = paths.first else { return nil }
+        let firstParts = first.split(separator: "/", omittingEmptySubsequences: true)
+        guard let top = firstParts.first else { return nil }
+        let topPrefix = String(top) + "/"
+        let allSameTop = paths.allSatisfy { $0.hasPrefix(topPrefix) }
+        return allSameTop ? topPrefix : nil
     }
 
     func deleteSelection() {
-        guard let handler, format?.supportsDeletion == true else {
+        guard format?.supportsDeletion == true else {
             lastError = "This archive type does not support deletion."; return
         }
-        // Approach A: `checked` only holds file IDs. Also delete the
-        // directory-marker entries whose descendants are fully checked, so
-        // the folder disappears from the listing entirely.
+        // Gather files + fully-checked folders
         let filePaths = checkedEntries.map(\.path)
         let folderPaths = entries
             .filter { $0.isDirectory && folderCheckState($0) == .checked }
             .map(\.path)
-        let paths = Array(Set(filePaths + folderPaths))
-        guard !paths.isEmpty else { return }
+        let pathsToDelete = Set(filePaths + folderPaths)
+        guard !pathsToDelete.isEmpty else { return }
 
         let alert = NSAlert()
-        alert.messageText = "Delete \(paths.count) entry(ies) from archive?"
-        alert.informativeText = "This rewrites the archive and cannot be undone."
+        alert.messageText = "Delete \(pathsToDelete.count) entry(ies) from archive?"
+        alert.informativeText = "Changes won\u{2019}t be written to disk until you save."
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        runBusy({
-            try handler.delete(paths: paths)
-            return try handler.list()
-        }, thenOnMain: { [weak self] newEntries in
-            guard let self else { return }
-            self.entries = newEntries
-            self.folderSizeCache = [:]
-            self.folderCompressedSizeCache = [:]
-            self.folderFileIDsCache = [:]
-            self.folderCheckStateCache = [:]
-            // Entry IDs are regenerated on each list() — `checked` is stale.
-            self.checked = []
-            if let f = self.focused, !newEntries.contains(where: { $0.id == f }) { self.focused = nil }
-        })
+
+        // Virtual delete: remove from in-memory list immediately.
+        // The archive file stays unchanged — the user extracts only what they
+        // need, and can ⌘S to rewrite the archive when they have enough space.
+        entries.removeAll { pathsToDelete.contains($0.path) }
+        checked = []
+        isDirty = true
+        buildIndices()
+        if let f = focused, entriesByID[f] == nil { focused = nil }
     }
 
     /// Delete a specific set of entries (regardless of checked state).
-    /// Used by the right-click "Delete" menu item for a selection.
     func deletePaths(_ targetIDs: [ArchiveEntry.ID]) {
-        guard let handler, format?.supportsDeletion == true else {
+        guard format?.supportsDeletion == true else {
             lastError = "This archive type does not support deletion."; return
         }
-        // Expand folder targets to include all descendants (files + sub-folders).
-        var paths: Set<String> = []
+        // Expand folder targets to include all descendants.
+        var pathsToDelete: Set<String> = []
         for id in targetIDs {
-            guard let e = entries.first(where: { $0.id == id }) else { continue }
+            guard let e = entriesByID[id] else { continue }
             if e.isDirectory {
                 let prefix = normalizedDirectoryPath(for: e.path)
                 for sub in entries where sub.path.hasPrefix(prefix) || sub.path == e.path {
-                    paths.insert(sub.path)
+                    pathsToDelete.insert(sub.path)
                 }
-                paths.insert(e.path)
+                pathsToDelete.insert(e.path)
             } else {
-                paths.insert(e.path)
+                pathsToDelete.insert(e.path)
             }
         }
-        guard !paths.isEmpty else { return }
+        guard !pathsToDelete.isEmpty else { return }
 
         let alert = NSAlert()
-        alert.messageText = "Delete \(paths.count) entry(ies) from archive?"
-        alert.informativeText = "This rewrites the archive and cannot be undone."
+        alert.messageText = "Delete \(pathsToDelete.count) entry(ies) from archive?"
+        alert.informativeText = "Changes won\u{2019}t be written to disk until you save."
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let pathList = Array(paths)
-        runBusy({
-            try handler.delete(paths: pathList)
-            return try handler.list()
-        }, thenOnMain: { [weak self] newEntries in
-            guard let self else { return }
-            self.entries = newEntries
-            self.folderSizeCache = [:]
-            self.folderCompressedSizeCache = [:]
-            self.folderFileIDsCache = [:]
-            self.folderCheckStateCache = [:]
-            self.checked = []
-            if let f = self.focused, !newEntries.contains(where: { $0.id == f }) { self.focused = nil }
-        })
+        entries.removeAll { pathsToDelete.contains($0.path) }
+        checked.subtract(targetIDs)
+        isDirty = true
+        buildIndices()
+        if let f = focused, entriesByID[f] == nil { focused = nil }
+    }
+
+    // MARK: - Rename
+
+    /// Rename a single entry. If it’s a directory, all children get their
+    /// path prefixes updated too.
+    func renameEntry(_ entryID: ArchiveEntry.ID, newName: String) {
+        guard format?.supportsRename == true else {
+            lastError = "This archive type does not support renaming."; return
+        }
+        guard let idx = entries.firstIndex(where: { $0.id == entryID }) else { return }
+        let entry = entries[idx]
+        let oldName = entry.name
+        guard newName != oldName, !newName.isEmpty else { return }
+
+        if entry.isDirectory {
+            // Update the folder’s own path
+            let oldPrefix = normalizedDirectoryPath(for: entry.path)
+            let parentDir = entry.parentPath
+            let newDirPath = parentDir.isEmpty
+                ? newName + "/"
+                : parentDir + "/" + newName + "/"
+            entries[idx].path = newDirPath
+
+            // Update all children whose path starts with oldPrefix
+            for i in entries.indices {
+                if entries[i].path.hasPrefix(oldPrefix) && entries[i].id != entryID {
+                    entries[i].path = newDirPath + entries[i].path.dropFirst(oldPrefix.count)
+                }
+            }
+        } else {
+            let parentDir = entry.parentPath
+            entries[idx].path = parentDir.isEmpty
+                ? newName
+                : parentDir + "/" + newName
+        }
+
+        isDirty = true
+        buildIndices()
+    }
+
+    // MARK: - Save
+
+    func saveArchive() {
+        guard isDirty, let archiveURL else { return }
+        guard let handler else { return }
+
+        // Determine the destination. For RAR we must save as ZIP since
+        // the RAR format is proprietary and we can’t create RAR files.
+        let isConversion = originalFormat == .rar
+        let saveURL: URL
+        if isConversion {
+            // Change .rar → .zip
+            saveURL = archiveURL.deletingPathExtension().appendingPathExtension("zip")
+        } else {
+            saveURL = archiveURL
+        }
+
+        isBusy = true
+        saveProgress = 0.0
+        saveStatusText = "Preparing\u{2026}"
+        let currentEntries = entries
+        let sourceHandler = handler
+        // NB: don't capture `FileManager.default` via a local `let fm` in the
+        // outer scope — under Swift 6 strict concurrency that becomes a
+        // non-Sendable capture when the Task.detached closure below
+        // references it. Access `FileManager.default` directly inside the
+        // detached closure instead.
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("filesnake-save-\(UUID().uuidString)", isDirectory: true)
+
+        do {
+            try ensureEnoughDiskSpaceForSave(currentEntries: currentEntries, saveURL: saveURL)
+        } catch {
+            lastError = "Save failed: \(error.localizedDescription)"
+            return
+        }
+
+        let box = WeakBox(self)
+        Task.detached {
+            let fm = FileManager.default
+            do {
+                try fm.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+                defer { try? fm.removeItem(at: tmpDir) }
+
+                // Step 1: Stage every file directly at its CURRENT path. This
+                // collapses the old "extract-by-originalPath → rename on disk"
+                // flow into a single write, which:
+                //   • eliminates ghost directories left behind when a rename
+                //     empties the original parent, and
+                //   • guarantees the stage tree mirrors the saved archive
+                //     exactly — nothing extra, nothing missing.
+                let stageDir = tmpDir.appendingPathComponent("stage", isDirectory: true)
+                try fm.createDirectory(at: stageDir, withIntermediateDirectories: true)
+
+                let fileEntries = currentEntries.filter { !$0.isDirectory }
+                let totalFiles = fileEntries.count
+                for (idx, entry) in fileEntries.enumerated() {
+                    let name = (entry.path as NSString).lastPathComponent
+                    await MainActor.run {
+                        box.value?.saveProgress = totalFiles > 0
+                            ? Double(idx) / Double(totalFiles) * 0.85  // extraction = 85%
+                            : 0.0
+                        box.value?.saveStatusText = "Saving \(idx + 1) of \(totalFiles) \u{2014} \(name)"
+                    }
+                    let data = try sourceHandler.extractToMemory(path: entry.originalPath)
+                    let dst = stageDir.appendingPathComponent(entry.path)
+                    try fm.createDirectory(
+                        at: dst.deletingLastPathComponent(),
+                        withIntermediateDirectories: true)
+                    try data.write(to: dst)
+                }
+                await MainActor.run {
+                    box.value?.saveProgress = 0.90
+                    box.value?.saveStatusText = "Compressing\u{2026}"
+                }
+
+                // Step 2: Materialize every directory entry — including empty
+                // ones — so `zip -r` preserves them. Without this, renaming an
+                // empty folder (or any archive that contains empty folders)
+                // loses those entries entirely on save.
+                let dirEntries = currentEntries.filter { $0.isDirectory }
+                for dir in dirEntries {
+                    let target = stageDir.appendingPathComponent(dir.path, isDirectory: true)
+                    try fm.createDirectory(at: target, withIntermediateDirectories: true)
+                }
+
+                // Validate staging: every file AND directory entry must exist
+                // before packing. Directory validation is what catches the
+                // empty-folder data-loss case.
+                let missingStagedFiles = fileEntries
+                    .map(\.path)
+                    .filter { !fm.fileExists(atPath: stageDir.appendingPathComponent($0).path) }
+                guard missingStagedFiles.isEmpty else {
+                    let sample = missingStagedFiles.prefix(3).joined(separator: ", ")
+                    throw ArchiveError.extractFailed(
+                        "Save staging mismatch: expected \(fileEntries.count) files, " +
+                        "missing: \(sample)")
+                }
+                let missingStagedDirs: [String] = dirEntries.compactMap { dir in
+                    var isDir: ObjCBool = false
+                    let p = stageDir.appendingPathComponent(dir.path).path
+                    let exists = fm.fileExists(atPath: p, isDirectory: &isDir)
+                    return (exists && isDir.boolValue) ? nil : dir.path
+                }
+                guard missingStagedDirs.isEmpty else {
+                    let sample = missingStagedDirs.prefix(3).joined(separator: ", ")
+                    throw ArchiveError.extractFailed(
+                        "Save staging mismatch: missing directories: \(sample)")
+                }
+
+                // Step 3: Create ZIP from staged folder contents using ZIPFoundation.
+                // We use ZIPFoundation directly rather than `/usr/bin/zip` because
+                // Apple's `/usr/bin/zip` is ancient and fails to set the UTF-8 flag
+                // (bit 11) when it writes paths. This causes ZIPFoundation to later
+                // decode them as CP437, breaking validation and extraction for
+                // non-ASCII names. ZIPFoundation sets the UTF-8 flag automatically.
+                let tmpZip = tmpDir.appendingPathComponent("__output.zip")
+                let saveArchive = try Archive(url: tmpZip, accessMode: .create)
+                
+                // Add all files first
+                for entry in fileEntries {
+                    let stagedURL = stageDir.appendingPathComponent(entry.path)
+                    try saveArchive.addEntry(with: entry.path, fileURL: stagedURL, compressionMethod: .none)
+                }
+                
+                // Add explicit directory entries so empty folders are preserved
+                for entry in dirEntries {
+                    let dirPath = entry.path.hasSuffix("/") ? entry.path : entry.path + "/"
+                    try saveArchive.addEntry(
+                        with: dirPath,
+                        type: .directory,
+                        uncompressedSize: Int64(0),
+                        compressionMethod: .none,
+                        provider: { _, _ in return Data() }
+                    )
+                }
+
+                // Validate ZIP payload. We check files AND directories — the
+                // old file-only check allowed an empty-folder data-loss bug
+                // to ship silently.
+                //
+                // NFC normalization: macOS HFS+ stores filenames in NFD (decomposed
+                // Unicode), so `zip -r` reads NFD paths from the stage dir and
+                // stores them in the new ZIP. The model paths decoded by ZIPFoundation
+                // from the original archive may be NFC. The same character "é"
+                // looks identical but `é`(NFC, U+00E9) ≠ `e + ́`(NFD) as strings.
+                // Normalizing both sides to NFC collapses that difference.
+                let archive = try Archive(url: tmpZip, accessMode: .read)
+                var zipFilePaths: Set<String> = []
+                var zipDirPaths: Set<String> = []
+                for entry in archive {
+                    var path = entry.path.precomposedStringWithCanonicalMapping
+                    if path.hasPrefix("./") { path.removeFirst(2) }
+                    switch entry.type {
+                    case .file:      zipFilePaths.insert(path)
+                    case .directory: zipDirPaths.insert(path)
+                    default: break
+                    }
+                }
+                let expectedFilePaths = Set(
+                    fileEntries.map { $0.path.precomposedStringWithCanonicalMapping })
+                let missingFilesInZip = expectedFilePaths.subtracting(zipFilePaths)
+                guard missingFilesInZip.isEmpty else {
+                    let sample = missingFilesInZip.sorted().prefix(3).joined(separator: ", ")
+                    throw ArchiveError.extractFailed(
+                        "Save output mismatch: missing files in zip: \(sample)")
+                }
+                // Any explicit directory entry from the model must appear in
+                // the zip (empty folders are the failure mode this catches).
+                let expectedDirPaths = Set(dirEntries.map {
+                    let p = $0.path.hasSuffix("/") ? $0.path : $0.path + "/"
+                    return p.precomposedStringWithCanonicalMapping
+                })
+                let missingDirsInZip = expectedDirPaths.subtracting(zipDirPaths)
+                guard missingDirsInZip.isEmpty else {
+                    let sample = missingDirsInZip.sorted().prefix(3).joined(separator: ", ")
+                    throw ArchiveError.extractFailed(
+                        "Save output mismatch: missing directories in zip: \(sample)")
+                }
+
+                // Step 4: Replace original file with rollback safety.
+                let backupURL = tmpDir.appendingPathComponent("__original_backup")
+                if fm.fileExists(atPath: backupURL.path) {
+                    try? fm.removeItem(at: backupURL)
+                }
+                if fm.fileExists(atPath: saveURL.path) {
+                    try fm.moveItem(at: saveURL, to: backupURL)
+                }
+                do {
+                    try fm.moveItem(at: tmpZip, to: saveURL)
+                    if fm.fileExists(atPath: backupURL.path) {
+                        try? fm.removeItem(at: backupURL)
+                    }
+                } catch {
+                    if fm.fileExists(atPath: backupURL.path) {
+                        try? fm.moveItem(at: backupURL, to: saveURL)
+                    }
+                    throw error
+                }
+
+                // If we converted from RAR, remove the old .rar
+                if isConversion && fm.fileExists(atPath: archiveURL.path) {
+                    try fm.removeItem(at: archiveURL)
+                }
+
+                await MainActor.run {
+                    guard let self = box.value else { return }
+                    self.saveProgress = 1.0
+                    self.saveStatusText = "Done"
+                }
+                // Brief pause so the user sees 100% before dismissal
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                await MainActor.run {
+                    guard let self = box.value else { return }
+                    self.isBusy = false
+                    self.saveProgress = nil
+                    self.saveStatusText = ""
+                    // Only reopen if the document is still open. If the user
+                    // triggered save via the close-prompt, close() has already
+                    // wiped state (archiveURL == nil) — reopening here would
+                    // repopulate a detached window and tear QuickLook apart
+                    // mid-teardown (the cause of the PreviewPane crash).
+                    if self.archiveURL != nil {
+                        self.open(url: saveURL)
+                    }
+                }
+            } catch {
+                let msg = error.localizedDescription
+                await MainActor.run {
+                    box.value?.lastError = "Save failed: \(msg)"
+                    box.value?.isBusy = false
+                    box.value?.saveProgress = nil
+                    box.value?.saveStatusText = ""
+                }
+            }
+        }
+    }
+
+    /// Called by the app delegate when the user chooses Save in the quit dialog.
+    /// Runs the full save pipeline, then tells macOS it's safe to terminate.
+    /// We returned .terminateLater from applicationShouldTerminate, so macOS
+    /// holds the quit until we call NSApp.reply(toApplicationShouldTerminate:).
+    func saveAndThenTerminate() {
+        // Run the normal save. When it completes, reply to the system.
+        saveArchive()
+        // Watch isBusy: when it drops back to false the save task finished.
+        let box = WeakBox(self)
+        Task { @MainActor in
+            // Poll until save finishes (isBusy goes false = done or errored).
+            while box.value?.isBusy == true {
+                try? await Task.sleep(nanoseconds: 50_000_000) // 50 ms
+            }
+            let succeeded = box.value?.lastError == nil
+            if succeeded {
+                NSApp.reply(toApplicationShouldTerminate: true)
+            } else {
+                // Leave the app alive so the error alert is visible.
+                NSApp.reply(toApplicationShouldTerminate: false)
+            }
+        }
+    }
+
+    private func ensureEnoughDiskSpaceForSave(
+        currentEntries: [ArchiveEntry],
+        saveURL: URL
+    ) throws {
+        let estimatedStageBytes = currentEntries
+            .filter { !$0.isDirectory }
+            .reduce(UInt64(0)) { $0 + $1.uncompressedSize }
+        // We stage extracted files and then write a new ZIP; assume near-worst-case.
+        let estimatedRequired = estimatedStageBytes
+            .addingReportingOverflow(estimatedStageBytes).partialValue
+            .addingReportingOverflow(64 * 1024 * 1024).partialValue
+
+        let targetDir = saveURL.deletingLastPathComponent()
+        let values = try targetDir.resourceValues(
+            forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey]
+        )
+        let available = UInt64(values.volumeAvailableCapacityForImportantUsage ??
+                               Int64(values.volumeAvailableCapacity ?? 0))
+
+        guard available >= estimatedRequired else {
+            let need = Formatters.bytes(estimatedRequired)
+            let have = Formatters.bytes(available)
+            throw ArchiveError.extractFailed(
+                "Not enough free disk space to save this archive. Need about \(need), available \(have).")
+        }
     }
 
     /// Extract a single file entry to the preview/temp cache and return its URL.
     /// For folders, extracts all descendants and returns the folder URL.
     func materializeForOpen(_ entry: ArchiveEntry) -> URL? {
         guard let handler, let dir = previewCacheDir else { return nil }
+        let fm = FileManager.default
         if entry.isDirectory {
             let prefix = normalizedDirectoryPath(for: entry.path)
             let childFiles = entries.filter { !$0.isDirectory && $0.path.hasPrefix(prefix) }
             guard !childFiles.isEmpty else {
                 // Empty folder — create an empty directory to open.
                 let target = dir.appendingPathComponent(entry.path, isDirectory: true)
-                try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+                try? fm.createDirectory(at: target, withIntermediateDirectories: true)
                 return target
             }
             do {
-                try handler.extract(paths: childFiles.map(\.path), to: dir)
+                try handler.extract(paths: childFiles.map(\.originalPath), to: dir)
+                for item in childFiles where item.path != item.originalPath {
+                    let src = dir.appendingPathComponent(item.originalPath)
+                    let dst = dir.appendingPathComponent(item.path)
+                    guard fm.fileExists(atPath: src.path) else { continue }
+                    try fm.createDirectory(
+                        at: dst.deletingLastPathComponent(),
+                        withIntermediateDirectories: true)
+                    if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
+                    try fm.moveItem(at: src, to: dst)
+                }
                 return dir.appendingPathComponent(entry.path, isDirectory: true)
             } catch {
                 lastError = error.localizedDescription
@@ -520,12 +1166,20 @@ final class ArchiveDocument: ObservableObject {
             }
         } else {
             let target = dir.appendingPathComponent(entry.path)
-            if FileManager.default.fileExists(atPath: target.path) { return target }
+            if fm.fileExists(atPath: target.path) { return target }
             do {
-                try FileManager.default.createDirectory(
+                try fm.createDirectory(
                     at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let data = try handler.extractToMemory(path: entry.path)
-                try data.write(to: target)
+                let data = try handler.extractToMemory(path: entry.originalPath)
+                let originalTarget = dir.appendingPathComponent(entry.originalPath)
+                try fm.createDirectory(
+                    at: originalTarget.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try data.write(to: originalTarget)
+                if entry.path != entry.originalPath {
+                    if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
+                    try fm.moveItem(at: originalTarget, to: target)
+                }
                 return target
             } catch {
                 lastError = error.localizedDescription
@@ -573,13 +1227,21 @@ final class ArchiveDocument: ObservableObject {
 
     func materializeForPreview(_ entry: ArchiveEntry) -> URL? {
         guard let handler, let dir = previewCacheDir, !entry.isDirectory else { return nil }
+        let fm = FileManager.default
         let target = dir.appendingPathComponent(entry.path)
-        if FileManager.default.fileExists(atPath: target.path) { return target }
+        if fm.fileExists(atPath: target.path) { return target }
         do {
-            try FileManager.default.createDirectory(
+            try fm.createDirectory(
                 at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try handler.extractToMemory(path: entry.path)
-            try data.write(to: target)
+            let data = try handler.extractToMemory(path: entry.originalPath)
+            let originalTarget = dir.appendingPathComponent(entry.originalPath)
+            try fm.createDirectory(
+                at: originalTarget.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: originalTarget)
+            if entry.path != entry.originalPath {
+                if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
+                try fm.moveItem(at: originalTarget, to: target)
+            }
             return target
         } catch { lastError = error.localizedDescription; return nil }
     }
@@ -616,19 +1278,43 @@ final class ArchiveDocument: ObservableObject {
         path.hasSuffix("/") ? path : path + "/"
     }
 
+    /// True for paths that are pure macOS Finder metadata noise and should
+    /// be hidden from the user (and stripped on save).
+    /// Covers:
+    ///   • `__MACOSX/…`  — AppleDouble resource-fork sidecar tree injected
+    ///     by Finder's "Compress" action.
+    ///   • `._<name>`    — legacy AppleDouble sidecars.
+    ///   • `.DS_Store`   — Finder view-state junk.
+    ///
+    /// `nonisolated` because the class is `@MainActor` and this is called
+    /// from `Task.detached` in `open(url:)`. The function is pure — no
+    /// instance state is touched — so there is nothing to protect.
+    nonisolated static func isMacMetadataPath(_ path: String) -> Bool {
+        // __MACOSX wrapper (with or without trailing slash, at root or nested
+        // — nested shouldn't happen, but be defensive).
+        if path == "__MACOSX" || path == "__MACOSX/" { return true }
+        if path.hasPrefix("__MACOSX/") { return true }
+        // Last path component checks
+        let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
+        let name = (trimmed as NSString).lastPathComponent
+        if name == ".DS_Store" { return true }
+        if name.hasPrefix("._") { return true }
+        return false
+    }
+
     private func runBusy<T: Sendable>(
         _ work: @escaping @Sendable () throws -> T,
-        thenOnMain apply: @escaping @MainActor (T) -> Void
+        thenOnMain apply: @escaping @MainActor (Result<T, Error>) -> Void
     ) {
         isBusy = true
         let box = WeakBox(self)
         Task.detached {
             do {
                 let result = try work()
-                await MainActor.run { apply(result); box.value?.isBusy = false }
+                await MainActor.run { apply(.success(result)); box.value?.isBusy = false }
             } catch {
                 let msg = error.localizedDescription
-                await MainActor.run { box.value?.lastError = msg; box.value?.isBusy = false }
+                await MainActor.run { box.value?.lastError = msg; box.value?.isBusy = false; box.value?.saveProgress = nil; apply(.failure(error)) }
             }
         }
     }
@@ -649,4 +1335,184 @@ final class ArchiveDocument: ObservableObject {
 private final class WeakBox<T: AnyObject>: @unchecked Sendable {
     weak var value: T?
     init(_ value: T) { self.value = value }
+}
+
+// MARK: - Background Extraction
+
+extension ArchiveDocument {
+    nonisolated static func backgroundExtract(urls: [URL], dest: String, trash: Bool, appDelegate: AppDelegate? = nil) {
+        Task { @MainActor in
+            for url in urls {
+                let doc = ArchiveDocument()
+                if dest != "select" {
+                    appDelegate?.document = doc
+                }
+                
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    doc.open(url: url) {
+                        continuation.resume()
+                    }
+                }
+                
+                guard doc.handler != nil else { continue }
+                
+                var targetURL: URL?
+                if dest == "select" {
+                    NSApp.activate(ignoringOtherApps: true)
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.canChooseFiles = false
+                    panel.allowsMultipleSelection = false
+                    panel.prompt = "Extract Here"
+                    panel.message = "Select a destination folder"
+                    if panel.runModal() == .OK, let selURL = panel.url {
+                        targetURL = selURL
+                    }
+                } else {
+                    switch dest {
+                    case "desktop": targetURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!
+                    case "documents": targetURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                    case "downloads": targetURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+                    case "here": fallthrough
+                    default: targetURL = url.deletingLastPathComponent()
+                    }
+                }
+                
+                guard let finalDest = targetURL else { continue }
+                
+                let topLevelCount = Set(doc.entries.compactMap { $0.path.split(separator: "/").first }).count
+                let finalTargetURL = topLevelCount > 1 ? finalDest.appendingPathComponent(url.deletingPathExtension().lastPathComponent) : finalDest
+                
+                let fileEntries = doc.entries.filter { !$0.isDirectory }
+                
+                if dest == "select" {
+                    appDelegate?.document = doc
+                    // Hide again before extraction begins
+                    for window in NSApp.windows where !(window is NSPanel) {
+                        window.close()
+                    }
+                    NSApp.hide(nil)
+                }
+                
+                let startTime = Date()
+                let success = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                    doc.extractEntries(fileEntries, to: finalTargetURL, using: doc.handler!, completion: { ok in
+                        continuation.resume(returning: ok)
+                    })
+                }
+                
+                if !success {
+                    // If it failed, don't trash, and show error briefly
+                    let errorMsg = doc.lastError?.lowercased() ?? ""
+                    if errorMsg.contains("space") || errorMsg.contains("nospc") {
+                        doc.saveStatusText = "Not enough space on the destination folder."
+                    } else {
+                        doc.saveStatusText = "Extraction Failed: \(doc.lastError ?? "Unknown Error")"
+                    }
+                    doc.saveProgress = nil
+                    doc.isBusy = true // Keep panel open to show the error
+                    try? await Task.sleep(nanoseconds: 3_000_000_000) // 3s for user to read
+                } else {
+                    // Ensure HUD is visible for at least a short moment so it doesn't flash like a bug
+                    let elapsed = Date().timeIntervalSince(startTime)
+                    if elapsed < 0.6 {
+                        try? await Task.sleep(nanoseconds: UInt64((0.6 - elapsed) * 1_000_000_000))
+                    }
+                    
+                    if trash {
+                        try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                    }
+                }
+            }
+            if appDelegate != nil {
+                // If it failed, we already waited 3s. If it succeeded, we waited 0.6s.
+                // We can terminate now.
+                NSApp.terminate(nil)
+            }
+        }
+    }
+    
+    nonisolated static func testValidity(urls: [URL], appDelegate: AppDelegate?) {
+        Task { @MainActor in
+            for url in urls {
+                let doc = ArchiveDocument()
+                appDelegate?.document = doc
+                
+                doc.saveStatusText = "Verifying\u{2026}"
+                doc.isBusy = true
+                
+                let box = WeakBox(doc)
+                appDelegate?.observeSaveProgress(for: doc)
+                
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    doc.open(url: url) {
+                        continuation.resume()
+                    }
+                }
+                
+                guard doc.handler != nil else { continue }
+                
+                doc.isBusy = true
+                doc.saveStatusText = "Verifying\u{2026}"
+                doc.saveProgress = 0.0
+                
+                let filesToVerify = doc.entries.filter { !$0.isDirectory }
+                let totalBytes = filesToVerify.reduce(0) { $0 + $1.uncompressedSize }
+                let handler = doc.handler
+                
+                let verificationResult = await Task.detached {
+                    var verifiedBytes: UInt64 = 0
+                    do {
+                        for entry in filesToVerify {
+                            if Task.isCancelled { break }
+                            _ = try handler?.extractToMemory(path: entry.path)
+                            verifiedBytes += entry.uncompressedSize
+                            
+                            let currentVerified = verifiedBytes
+                            await MainActor.run {
+                                box.value?.saveProgress = Double(currentVerified) / Double(max(totalBytes, 1))
+                                let vStr = ArchiveDocument.formatBytes(currentVerified)
+                                let tStr = ArchiveDocument.formatBytes(totalBytes)
+                                box.value?.saveStatusText = "Verifying\u{2026} \(vStr) of \(tStr)"
+                            }
+                        }
+                        return true
+                    } catch {
+                        await MainActor.run { box.value?.lastError = error.localizedDescription }
+                        return false
+                    }
+                }.value
+                
+                if verificationResult {
+                    doc.saveStatusText = "No errors found"
+                    doc.saveProgress = 1.0
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+                
+                doc.isBusy = false
+                doc.saveProgress = nil
+            }
+            if appDelegate != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
+            }
+        }
+    }
+    nonisolated static func formatBytes(_ bytes: UInt64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useGB, .useMB, .useKB, .useBytes]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
+    }
+    
+    nonisolated static func directorySize(url: URL) -> UInt64 {
+        var size: UInt64 = 0
+        if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey]) {
+            for case let fileURL as URL in enumerator {
+                if let attr = try? fileURL.resourceValues(forKeys: [.totalFileAllocatedSizeKey]), let fileSize = attr.totalFileAllocatedSize {
+                    size += UInt64(fileSize)
+                }
+            }
+        }
+        return size
+    }
 }

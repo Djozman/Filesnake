@@ -36,6 +36,8 @@ enum ArchiveFormat: String, CaseIterable {
         }
     }
 
-    var supportsDeletion: Bool { self == .zip }
+    /// Formats that support in-place or working-copy deletion and rename.
+    var supportsDeletion: Bool { self == .zip || self == .rar }
+    var supportsRename: Bool { self == .zip || self == .rar }
     var supportsRandomExtract: Bool { self == .zip || self == .tar || self == .tarGz }
 }
