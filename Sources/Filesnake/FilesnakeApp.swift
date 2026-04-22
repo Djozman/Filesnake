@@ -18,7 +18,21 @@ struct FilesnakeApp: App {
                 .frame(minWidth: 480, minHeight: 320)
                 .navigationTitle("")
                 .onOpenURL { url in
-                    document.open(url: url)
+                    if url.scheme == "filesnake" {
+                        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+                        let filePaths = comps.queryItems?.filter { $0.name == "file" }.compactMap { $0.value } ?? []
+                        let urls = filePaths.map { URL(fileURLWithPath: $0) }
+                        
+                        if comps.host == "extract" {
+                            let dest = comps.queryItems?.first(where: { $0.name == "dest" })?.value ?? "here"
+                            let trash = comps.queryItems?.first(where: { $0.name == "trash" })?.value == "1"
+                            ArchiveDocument.backgroundExtract(urls: urls, dest: dest, trash: trash, appDelegate: nil)
+                        } else if comps.host == "test" {
+                            ArchiveDocument.testValidity(urls: urls, appDelegate: nil)
+                        }
+                    } else {
+                        document.open(url: url)
+                    }
                 }
         }
         .windowToolbarStyle(.unified(showsTitle: false))
