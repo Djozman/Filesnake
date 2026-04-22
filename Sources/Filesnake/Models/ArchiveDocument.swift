@@ -529,7 +529,7 @@ final class ArchiveDocument: ObservableObject {
     }
 
     func extractSelection() {
-        guard let handler, !checked.isEmpty else { return }
+        guard handler != nil, !checked.isEmpty else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.prompt = "Extract Here"; panel.message = "Choose a destination folder"
@@ -1406,9 +1406,6 @@ extension ArchiveDocument {
         Task { @MainActor in
             for url in urls {
                 let doc = ArchiveDocument()
-                if dest != "select" {
-                    appDelegate?.document = doc
-                }
                 
                 await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                     doc.open(url: url) {
@@ -1417,6 +1414,8 @@ extension ArchiveDocument {
                 }
                 
                 guard doc.handler != nil else { continue }
+                appDelegate?.observeSaveProgress(for: doc)
+                doc.isBusy = true
                 
                 var targetURL: URL?
                 if dest == "select" {
@@ -1448,11 +1447,6 @@ extension ArchiveDocument {
                 let fileEntries = doc.entries.filter { !$0.isDirectory }
                 
                 if dest == "select" {
-                    appDelegate?.document = doc
-                    // Hide again before extraction begins
-                    for window in NSApp.windows where !(window is NSPanel) {
-                        window.close()
-                    }
                     NSApp.hide(nil)
                 }
                 
@@ -1485,6 +1479,7 @@ extension ArchiveDocument {
                         try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
                     }
                 }
+                appDelegate?.closeHUD()
             }
             if appDelegate != nil {
                 // If it failed, we already waited 3s. If it succeeded, we waited 0.6s.
@@ -1553,6 +1548,7 @@ extension ArchiveDocument {
                 
                 doc.isBusy = false
                 doc.saveProgress = nil
+                appDelegate?.closeHUD()
             }
             if appDelegate != nil {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }

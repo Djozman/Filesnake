@@ -2,14 +2,61 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AppKit
 
-final class AppDelegate: NSObject {
-    var document: ArchiveDocument?
-    func observeSaveProgress(for document: ArchiveDocument) {}
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    var hudWindow: NSPanel?
+    var document: ArchiveDocument? // Keep for legacy if needed, but hud is better
+    
+    func showHUD(for document: ArchiveDocument) {
+        if hudWindow == nil {
+            let panel = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 300, height: 80),
+                styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView],
+                backing: .buffered, defer: false)
+            panel.isFloatingPanel = true
+            panel.level = .floating
+            panel.isMovableByWindowBackground = true
+            panel.titleVisibility = .hidden
+            panel.titlebarAppearsTransparent = true
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hasShadow = true
+            
+            let hostingView = NSHostingView(rootView: HUDWrapper(document: document))
+            panel.contentView = hostingView
+            panel.center()
+            panel.orderFrontRegardless()
+            self.hudWindow = panel
+        }
+    }
+    
+    func closeHUD() {
+        hudWindow?.close()
+        hudWindow = nil
+    }
+    
+    func observeSaveProgress(for document: ArchiveDocument) {
+        showHUD(for: document)
+    }
+}
+
+struct HUDWrapper: View {
+    @ObservedObject var document: ArchiveDocument
+    var body: some View {
+        if let progress = document.saveProgress {
+            SaveProgressCard(progress: progress, statusText: document.saveStatusText)
+                .frame(width: 320)
+        } else if document.isBusy {
+             // If we have no progress but we are busy, show 0%
+             SaveProgressCard(progress: 0, statusText: document.saveStatusText)
+                .frame(width: 320)
+        }
+    }
 }
 
 @main
 struct FilesnakeApp: App {
     @StateObject private var document = ArchiveDocument()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         WindowGroup {
@@ -22,13 +69,21 @@ struct FilesnakeApp: App {
                         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
                         let filePaths = comps.queryItems?.filter { $0.name == "file" }.compactMap { $0.value } ?? []
                         let urls = filePaths.map { URL(fileURLWithPath: $0) }
+                        let isBackground = comps.queryItems?.first(where: { $0.name == "background" })?.value == "1"
+                        
+                        if isBackground {
+                            // Close main windows to stay "background"
+                            for window in NSApp.windows where !(window is NSPanel) {
+                                window.close()
+                            }
+                        }
                         
                         if comps.host == "extract" {
                             let dest = comps.queryItems?.first(where: { $0.name == "dest" })?.value ?? "here"
                             let trash = comps.queryItems?.first(where: { $0.name == "trash" })?.value == "1"
-                            ArchiveDocument.backgroundExtract(urls: urls, dest: dest, trash: trash, appDelegate: nil)
+                            ArchiveDocument.backgroundExtract(urls: urls, dest: dest, trash: trash, appDelegate: appDelegate)
                         } else if comps.host == "test" {
-                            ArchiveDocument.testValidity(urls: urls, appDelegate: nil)
+                            ArchiveDocument.testValidity(urls: urls, appDelegate: appDelegate)
                         }
                     } else {
                         document.open(url: url)
