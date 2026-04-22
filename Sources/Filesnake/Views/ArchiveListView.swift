@@ -749,21 +749,21 @@ final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, N
     @objc func menuExtractChecked(_ sender: NSMenuItem) { document?.extractSelection() }
     @objc func menuExtractSelection(_ sender: NSMenuItem) {
         guard let ids = sender.representedObject as? NSArray, let doc = document else { return }
-        let paths = resolveExtractPaths(ids: ids)
-        guard !paths.isEmpty else { return }
+        let idArray = ids.compactMap { $0 as? ArchiveEntry.ID }
+        guard !idArray.isEmpty else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.prompt = "Extract Here"; panel.message = "Choose destination folder"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
-        doc.extractPaths(paths, to: dest)
+        doc.extractSelection(forIDs: idArray, to: dest)
     }
     @objc func menuExtractHere(_ sender: NSMenuItem) {
         guard let ids = sender.representedObject as? NSArray, let doc = document,
               let archiveURL = doc.archiveURL else { return }
         let dest = archiveURL.deletingLastPathComponent()
-        let paths = resolveExtractPaths(ids: ids)
-        guard !paths.isEmpty else { return }
-        doc.extractPaths(paths, to: dest)
+        let idArray = ids.compactMap { $0 as? ArchiveEntry.ID }
+        guard !idArray.isEmpty else { return }
+        doc.extractSelection(forIDs: idArray, to: dest)
     }
 
     /// Resolve selected IDs to extractable file paths.

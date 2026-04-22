@@ -501,17 +501,65 @@ final class ArchiveDocument: ObservableObject {
 
     // MARK: - Extract / Delete
 
+    // MARK: - Rebase Prefix Logic
+    
+    private func commonParentPrefix(for roots: [ArchiveEntry]) -> String {
+        guard let first = roots.first else { return "" }
+        func parentOf(_ path: String) -> String {
+            let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
+            if let lastSlash = trimmed.lastIndex(of: "/") {
+                return String(trimmed[...lastSlash])
+            }
+            return ""
+        }
+        var common = parentOf(first.path)
+        for entry in roots.dropFirst() {
+            let p = parentOf(entry.path)
+            while !p.hasPrefix(common) {
+                if common.isEmpty { break }
+                let trimmed = String(common.dropLast())
+                if let lastSlash = trimmed.lastIndex(of: "/") {
+                    common = String(trimmed[...lastSlash])
+                } else {
+                    common = ""
+                }
+            }
+        }
+        return common
+    }
+
     func extractSelection() {
         guard let handler, !checked.isEmpty else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.prompt = "Extract Here"; panel.message = "Choose a destination folder"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
-        let fileEntries = checkedEntries.filter { !$0.isDirectory }
-        let rebasePrefix = currentFolderPath
+        extractCheckedTo(dest)
+    }
+
+    func extractSelection(forIDs ids: [ArchiveEntry.ID], to dest: URL) {
+        guard let handler else { return }
+        
+        let explicitEntries = ids.compactMap { entriesByID[$0] }
+        let rebasePrefix = commonParentPrefix(for: explicitEntries)
+        
+        var filePaths = Set<String>()
+        for e in explicitEntries {
+            if e.isDirectory {
+                let prefix = e.path.hasSuffix("/") ? e.path : e.path + "/"
+                let children = entries.filter { !$0.isDirectory && $0.path.hasPrefix(prefix) }
+                filePaths.formUnion(children.map(\.path))
+            } else {
+                filePaths.insert(e.path)
+            }
+        }
+        
+        let matching = entries.filter { filePaths.contains($0.path) }
+        guard !matching.isEmpty else { return }
+        
         extractEntries(
-            fileEntries, 
-            to: dest, 
+            matching,
+            to: dest,
             using: handler,
             outputPath: { entry in
                 guard !rebasePrefix.isEmpty, entry.path.hasPrefix(rebasePrefix) else { return entry.path }
@@ -520,30 +568,26 @@ final class ArchiveDocument: ObservableObject {
         )
     }
 
-    func extractPaths(_ paths: [String], to dest: URL) {
-        guard let handler else { return }
-        // Find entries matching these paths
-        let matching = entries.filter { paths.contains($0.path) && !$0.isDirectory }
-        let rebasePrefix = currentFolderPath
-        extractEntries(
-            matching,
-            to: dest,
-            using: handler,
-            outputPath: { entry in
-                guard !rebasePrefix.isEmpty, entry.path.hasPrefix(rebasePrefix) else {
-                    return entry.path
-                }
-                return String(entry.path.dropFirst(rebasePrefix.count))
-            }
-        )
-    }
-
     /// Extract checked entries to a preset destination (no dialog).
     func extractCheckedTo(_ dest: URL) {
         guard let handler, !checked.isEmpty else { return }
+        
+        var highestRoots: [ArchiveEntry] = []
+        let allChecked = entries.filter { folderCheckState($0) == .checked }
+        for e in allChecked {
+            let hasCheckedParent = allChecked.contains { parent in 
+                e.path.hasPrefix(parent.path) && parent.path != e.path
+            }
+            if !hasCheckedParent {
+                highestRoots.append(e)
+            }
+        }
+        
         let fileEntries = checkedEntries.filter { !$0.isDirectory }
         guard !fileEntries.isEmpty else { return }
-        let rebasePrefix = currentFolderPath
+        
+        let rebasePrefix = commonParentPrefix(for: highestRoots)
+        
         extractEntries(
             fileEntries, 
             to: dest, 
