@@ -113,7 +113,9 @@ private final class InvisibleSplitView: NSSplitView {
             if isSubviewCollapsed(subs[i]) { continue }
             let maxX = subs[i].frame.maxX
             let zoneRect = NSRect(x: maxX - hotZone, y: 0, width: dT + hotZone * 2, height: bounds.height)
-            let area = NSTrackingArea(rect: zoneRect, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: self, userInfo: nil)
+            let area = NSTrackingArea(rect: zoneRect,
+                                      options: [.mouseEnteredAndExited, .activeInActiveApp],
+                                      owner: self, userInfo: nil)
             addTrackingArea(area)
             dividerTrackingAreas.append(area)
         }
@@ -138,7 +140,7 @@ private final class InvisibleSplitView: NSSplitView {
     func mouseDownCanMoveWindow() -> Bool { false }
 }
 
-// MARK: - NSSplitView three-pane layout
+// MARK: - Three-pane split
 
 struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
     let left: L
@@ -147,13 +149,14 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
     @Binding var sidebarVisible: Bool
     @Binding var previewVisible: Bool
 
-    static var sidebarMin:     CGFloat { 140 }
-    static var sidebarMax:     CGFloat { 340 }
-    static var centerMin:      CGFloat { 200 }
-    static var previewMin:     CGFloat { 160 }
-    static var previewMax:     CGFloat { 600 }
-    static var initialSidebar: CGFloat { 220 }
-    static var initialPreview: CGFloat { 300 }
+    // Layout constants
+    private static var sidebarMin:     CGFloat { 140 }
+    private static var sidebarMax:     CGFloat { 340 }
+    private static var centerMin:      CGFloat { 200 }
+    private static var previewMin:     CGFloat { 160 }
+    private static var previewMax:     CGFloat { 600 }
+    private static var initialSidebar: CGFloat { 220 }
+    private static var initialPreview: CGFloat { 300 }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -168,69 +171,81 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         let centerHost = NSHostingView(rootView: center)
         let rightHost  = NSHostingView(rootView: right)
 
-        // Collapse right pane initially
-        rightHost.isHidden = true
-
-        [leftHost, centerHost, rightHost].forEach {
-            $0.autoresizingMask = [.width, .height]
-            split.addArrangedSubview($0)
+        for v in [leftHost, centerHost, rightHost] as [NSView] {
+            v.autoresizingMask = [.width, .height]
+            split.addArrangedSubview(v)
         }
+
+        // Right pane hidden by default; sidebar shown.
+        rightHost.isHidden = true
+        context.coordinator.sidebarShown = true
+        context.coordinator.previewShown = false
 
         context.coordinator.split      = split
         context.coordinator.leftHost   = leftHost
         context.coordinator.centerHost = centerHost
         context.coordinator.rightHost  = rightHost
 
+        // Defer first layout until the split has real bounds.
         DispatchQueue.main.async {
-            let w = split.bounds.width
-            guard w > 0 else { return }
+            guard split.bounds.width > 0 else { return }
             split.setPosition(Self.initialSidebar, ofDividerAt: 0)
         }
         return split
     }
 
     func updateNSView(_ split: NSSplitView, context: Context) {
+        // Always update SwiftUI content.
         context.coordinator.leftHost?.rootView   = left
         context.coordinator.centerHost?.rootView = center
         context.coordinator.rightHost?.rootView  = right
 
-        let subs = split.arrangedSubviews
-        let leftView  = subs[0]
-        let rightView = subs[2]
+        let c = context.coordinator
 
-        let isLeftCollapsed  = split.isSubviewCollapsed(leftView)
-        let isRightCollapsed = split.isSubviewCollapsed(rightView)
-
-        // Sidebar
-        if sidebarVisible && isLeftCollapsed {
-            split.setPosition(Self.initialSidebar, ofDividerAt: 0)
-        } else if !sidebarVisible && !isLeftCollapsed {
-            split.setPosition(0, ofDividerAt: 0)
+        // --- Sidebar ---
+        if sidebarVisible != c.sidebarShown {
+            c.sidebarShown = sidebarVisible
+            let subs = split.arrangedSubviews
+            if sidebarVisible {
+                subs[0].isHidden = false
+                DispatchQueue.main.async {
+                    split.setPosition(Self.initialSidebar, ofDividerAt: 0)
+                }
+            } else {
+                split.setPosition(0, ofDividerAt: 0)
+                DispatchQueue.main.async {
+                    subs[0].isHidden = true
+                }
+            }
         }
 
-        // Preview: unhide first so NSSplitView knows the pane exists,
-        // then defer setPosition so the layout pass has already run.
-        if previewVisible && isRightCollapsed {
-            rightView.isHidden = false
-            DispatchQueue.main.async {
-                let total = split.bounds.width
-                guard total > 0 else { return }
-                let leftW = split.isSubviewCollapsed(subs[0]) ? 0 : subs[0].frame.width
-                let dT    = split.dividerThickness
-                // Guarantee center stays above its minimum.
-                let desiredPos = total - Self.initialPreview - dT
-                let minPos     = leftW + (leftW > 0 ? dT : 0) + Self.centerMin
-                split.setPosition(max(desiredPos, minPos), ofDividerAt: 1)
-            }
-        } else if !previewVisible && !isRightCollapsed {
-            split.setPosition(split.bounds.width + split.dividerThickness, ofDividerAt: 1)
-            DispatchQueue.main.async {
-                if !split.isSubviewCollapsed(rightView) {
-                    rightView.isHidden = true
+        // --- Preview ---
+        if previewVisible != c.previewShown {
+            c.previewShown = previewVisible
+            let subs = split.arrangedSubviews
+            if previewVisible {
+                // Unhide first so NSSplitView counts it in layout.
+                subs[2].isHidden = false
+                DispatchQueue.main.async {
+                    let total = split.bounds.width
+                    guard total > 0 else { return }
+                    let leftW = subs[0].isHidden ? 0 : subs[0].frame.width
+                    let dT    = split.dividerThickness
+                    let desiredPos = total - Self.initialPreview - dT
+                    let minPos     = leftW + (leftW > 0 ? dT : 0) + Self.centerMin
+                    split.setPosition(max(desiredPos, minPos), ofDividerAt: 1)
+                }
+            } else {
+                DispatchQueue.main.async {
+                    subs[2].isHidden = true
+                    // Reclaim the space: push divider 1 back to full width.
+                    split.setPosition(split.bounds.width, ofDividerAt: 1)
                 }
             }
         }
     }
+
+    // MARK: Coordinator
 
     @MainActor
     final class Coordinator: NSObject, NSSplitViewDelegate {
@@ -238,6 +253,17 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         var leftHost:   NSHostingView<L>?
         var centerHost: NSHostingView<C>?
         var rightHost:  NSHostingView<R>?
+
+        /// Mirrors the binding values so we only act on actual changes.
+        var sidebarShown = true
+        var previewShown = false
+
+        // Constants duplicated here for delegate use.
+        private let sidebarMin: CGFloat = 140
+        private let sidebarMax: CGFloat = 340
+        private let centerMin:  CGFloat = 200
+        private let previewMin: CGFloat = 160
+        private let previewMax: CGFloat = 600
 
         func splitView(_ splitView: NSSplitView,
                        constrainMinCoordinate proposedMin: CGFloat,
@@ -247,8 +273,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             switch dividerIndex {
             case 0: return sidebarMin
             case 1:
-                let leftEdge: CGFloat = splitView.isSubviewCollapsed(subs[0])
-                    ? 0 : subs[0].frame.maxX + dT
+                let leftEdge: CGFloat = subs[0].isHidden ? 0 : subs[0].frame.maxX + dT
                 return leftEdge + centerMin
             default: return proposedMin
             }
@@ -267,31 +292,25 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
             let subs = splitView.arrangedSubviews
             guard subs.count == 3 else { splitView.adjustSubviews(); return }
-            let total          = splitView.bounds.width
-            let dT             = splitView.dividerThickness
-            let leftCollapsed  = splitView.isSubviewCollapsed(subs[0])
-            let rightCollapsed = splitView.isSubviewCollapsed(subs[2])
-            let leftW: CGFloat  = leftCollapsed  ? 0 : max(sidebarMin, min(sidebarMax, subs[0].frame.width))
-            let rightW: CGFloat = rightCollapsed ? 0 : max(previewMin, min(previewMax, subs[2].frame.width))
-            let numDividers: CGFloat = (leftCollapsed ? 0 : 1) + (rightCollapsed ? 0 : 1)
-            let centerW = max(centerMin, total - leftW - rightW - numDividers * dT)
+            let total  = splitView.bounds.width
+            let dT     = splitView.dividerThickness
+            let leftHidden  = subs[0].isHidden
+            let rightHidden = subs[2].isHidden
+            let leftW:  CGFloat = leftHidden  ? 0 : max(sidebarMin, min(sidebarMax, subs[0].frame.width))
+            let rightW: CGFloat = rightHidden ? 0 : max(previewMin, min(previewMax, subs[2].frame.width))
+            let dividers: CGFloat = (leftHidden ? 0 : 1) + (rightHidden ? 0 : 1)
+            let centerW = max(centerMin, total - leftW - rightW - dividers * dT)
             let h = splitView.bounds.height
             var x: CGFloat = 0
-            if !leftCollapsed { subs[0].frame = NSRect(x: x, y: 0, width: leftW, height: h); x += leftW + dT }
+            if !leftHidden  { subs[0].frame = NSRect(x: x, y: 0, width: leftW,   height: h); x += leftW + dT }
             subs[1].frame = NSRect(x: x, y: 0, width: centerW, height: h); x += centerW
-            if !rightCollapsed { x += dT; subs[2].frame = NSRect(x: x, y: 0, width: rightW, height: h) }
+            if !rightHidden { x += dT; subs[2].frame = NSRect(x: x, y: 0, width: rightW, height: h) }
         }
 
         func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
             let subs = splitView.arrangedSubviews
             return subview === subs.first || subview === subs.last
         }
-
-        private let sidebarMin: CGFloat = 140
-        private let sidebarMax: CGFloat = 340
-        private let centerMin:  CGFloat = 200
-        private let previewMin: CGFloat = 160
-        private let previewMax: CGFloat = 600
     }
 }
 
@@ -302,9 +321,7 @@ struct InlineTopBar: View {
     @Binding var previewVisible: Bool
     var body: some View {
         HStack(spacing: 0) {
-            Button {
-                sidebarVisible.toggle()
-            } label: {
+            Button { sidebarVisible.toggle() } label: {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: 14, weight: .medium))
                     .frame(width: 28, height: 22)
@@ -314,9 +331,7 @@ struct InlineTopBar: View {
             .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
             .padding(.leading, 6)
             Spacer()
-            Button {
-                previewVisible.toggle()
-            } label: {
+            Button { previewVisible.toggle() } label: {
                 Image(systemName: "sidebar.right")
                     .font(.system(size: 14, weight: .medium))
                     .frame(width: 28, height: 22)
@@ -413,7 +428,9 @@ struct SaveProgressCard: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: statusText.contains("Extracting") ? "arrow.up.doc.fill" : (statusText.contains("Verifying") || statusText.contains("No errors") ? "checkmark.seal.fill" : "archivebox.fill"))
+            Image(systemName: statusText.contains("Extracting") ? "arrow.up.doc.fill"
+                  : (statusText.contains("Verifying") || statusText.contains("No errors")
+                     ? "checkmark.seal.fill" : "archivebox.fill"))
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 4) {
