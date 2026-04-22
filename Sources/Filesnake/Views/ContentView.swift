@@ -147,10 +147,10 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
     @Binding var sidebarVisible: Bool
     @Binding var previewVisible: Bool
 
-    static var sidebarMin:     CGFloat { 180 }
+    static var sidebarMin:     CGFloat { 140 }
     static var sidebarMax:     CGFloat { 340 }
-    static var centerMin:      CGFloat { 340 }
-    static var previewMin:     CGFloat { 220 }
+    static var centerMin:      CGFloat { 200 }
+    static var previewMin:     CGFloat { 160 }
     static var previewMax:     CGFloat { 600 }
     static var initialSidebar: CGFloat { 220 }
     static var initialPreview: CGFloat { 300 }
@@ -168,7 +168,6 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         let centerHost = NSHostingView(rootView: center)
         let rightHost  = NSHostingView(rootView: right)
 
-        // Hide the right pane BEFORE adding to split so it starts collapsed
         rightHost.isHidden = true
 
         [leftHost, centerHost, rightHost].forEach {
@@ -201,14 +200,12 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         let isLeftCollapsed  = split.isSubviewCollapsed(leftView)
         let isRightCollapsed = split.isSubviewCollapsed(rightView)
 
-        // Sidebar
         if sidebarVisible && isLeftCollapsed {
             split.setPosition(Self.initialSidebar, ofDividerAt: 0)
         } else if !sidebarVisible && !isLeftCollapsed {
             split.setPosition(0, ofDividerAt: 0)
         }
 
-        // Preview — use isHidden to force true collapse before layout runs
         if previewVisible && isRightCollapsed {
             rightView.isHidden = false
             split.setPosition(split.bounds.width - Self.initialPreview, ofDividerAt: 1)
@@ -277,10 +274,10 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             return subview === subs.first || subview === subs.last
         }
 
-        private let sidebarMin: CGFloat = 180
+        private let sidebarMin: CGFloat = 140
         private let sidebarMax: CGFloat = 340
-        private let centerMin:  CGFloat = 340
-        private let previewMin: CGFloat = 220
+        private let centerMin:  CGFloat = 200
+        private let previewMin: CGFloat = 160
         private let previewMax: CGFloat = 600
     }
 }

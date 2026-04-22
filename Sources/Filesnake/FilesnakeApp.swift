@@ -15,7 +15,7 @@ struct FilesnakeApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(document)
-                .frame(minWidth: 1060, minHeight: 620)
+                .frame(minWidth: 480, minHeight: 320)
                 .navigationTitle("")
                 .onOpenURL { url in
                     document.open(url: url)
@@ -24,7 +24,7 @@ struct FilesnakeApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Open…") {
+                Button("Open\u{2026}") {
                     let panel = NSOpenPanel()
                     panel.allowedContentTypes = ArchiveFormat.allowedOpenTypes
                     panel.allowsMultipleSelection = false

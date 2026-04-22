@@ -3,7 +3,7 @@
 #   make              — debug build
 #   make release      — release build
 #   make open         — build (debug) and launch
-#   make install      — release build + copy to /Applications
+#   make install      — release build + copy to /Applications + remove build/
 #   make uninstall    — remove from /Applications
 #   make release-zip  — release build + zip for GitHub distribution
 #   make clean        — remove build/
@@ -41,6 +41,7 @@ install: release
 	@echo "Installing to $(INSTALL_DIR)..."
 	@rm -rf $(INSTALL_DIR)/$(APP_NAME).app
 	@cp -R $(APP_BUNDLE) $(INSTALL_DIR)/$(APP_NAME).app
+	@rm -rf $(BUILD_DIR)
 	@echo "Installed: $(INSTALL_DIR)/$(APP_NAME).app"
 	@echo "You can now launch Filesnake from Spotlight or the Dock."
 
