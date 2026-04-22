@@ -379,3 +379,52 @@ struct StatusBar: View {
         }
     }
 }
+
+// MARK: - Save progress card (used in the floating NSPanel)
+
+struct SaveProgressCard: View {
+    let progress: Double
+    let statusText: String
+
+    var title: String {
+        if progress >= 1.0 { return "Complete" }
+        if statusText.contains("Extracting") { return "Extracting\u{2026}" }
+        if statusText.contains("Verifying") { return "Verifying\u{2026}" }
+        return "Saving\u{2026}"
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: statusText.contains("Extracting") ? "arrow.up.doc.fill" : (statusText.contains("Verifying") || statusText.contains("No errors") ? "checkmark.seal.fill" : "archivebox.fill"))
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.secondary)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    if progress >= 0 {
+                        Text("\(Int(progress * 100))%")
+                            .font(.system(size: 11, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .controlSize(.small)
+                    .animation(.linear(duration: 0.2), value: progress)
+                
+                Text(statusText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(12)
+        .background(Material.regular)
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+    }
+}
