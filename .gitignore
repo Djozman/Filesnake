@@ -12,3 +12,63 @@ xcuserdata/
 .idea/
 .vscode/
 sort_files.py
+
+# Local test artifacts (v1.2)
+a.mov
+a\ 2.mov
+huge.bin
+huge2.bin
+large.bin
+large\ 2.bin
+emoji.zip
+fake.zip
+test_huge.zip
+parse_test.swift
+parse_test2.swift
+run_test.swift
+test.swift
+test_emoji.py
+make_fake_zip.py
+debug.log
+fs_test/
+ziiFL6wI
+
+# Local test artifacts (v1.2)
+a.mov
+a\ 2.mov
+huge.bin
+huge2.bin
+large.bin
+large\ 2.bin
+emoji.zip
+fake.zip
+test_huge.zip
+parse_test.swift
+parse_test2.swift
+run_test.swift
+test.swift
+test_emoji.py
+make_fake_zip.py
+debug.log
+fs_test/
+ziiFL6wI
+
+# Local test artifacts (v1.2)
+a.mov
+a\ 2.mov
+huge.bin
+huge2.bin
+large.bin
+large\ 2.bin
+emoji.zip
+fake.zip
+test_huge.zip
+parse_test.swift
+parse_test2.swift
+run_test.swift
+test.swift
+test_emoji.py
+make_fake_zip.py
+debug.log
+fs_test/
+ziiFL6wI
