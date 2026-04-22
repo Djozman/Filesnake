@@ -2,6 +2,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AppKit
 
+final class AppDelegate: NSObject {
+    var document: ArchiveDocument?
+    func observeSaveProgress(for document: ArchiveDocument) {}
+}
+
 @main
 struct FilesnakeApp: App {
     @StateObject private var document = ArchiveDocument()
