@@ -5,7 +5,7 @@ import ZIPFoundation
 enum ZipCreator {
 
     /// Creates a ZIP at `destination` containing the given file/directory URLs.
-    /// Directories are added recursively.
+    /// Directories are traversed recursively; only regular files are added.
     static func createZip(at destination: URL, from sources: [URL]) throws {
         // Remove existing file if needed
         let fm = FileManager.default
@@ -23,15 +23,11 @@ enum ZipCreator {
         for source in sources {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: source.path, isDirectory: &isDir) else { continue }
-
             if isDir.boolValue {
-                // Add directory contents recursively
-                try addDirectory(source, to: archive, basePath: source.deletingLastPathComponent().path)
+                try addFilesRecursively(from: source, to: archive, basePath: source.deletingLastPathComponent().path)
             } else {
-                // Add single file
-                let relativePath = source.lastPathComponent
                 try archive.addEntry(
-                    with: relativePath,
+                    with: source.lastPathComponent,
                     fileURL: source,
                     compressionMethod: .deflate
                 )
@@ -39,42 +35,23 @@ enum ZipCreator {
         }
     }
 
-    private static func addDirectory(_ dirURL: URL, to archive: Archive, basePath: String) throws {
+    private static func addFilesRecursively(from dirURL: URL, to archive: Archive, basePath: String) throws {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
             at: dirURL,
-            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
+            includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else { return }
 
-        // Add the directory entry itself
-        let dirRelative = String(dirURL.path.dropFirst(basePath.count + 1)) + "/"
-        try archive.addEntry(
-            with: dirRelative,
-            type: .directory,
-            uncompressedSize: Int64(0),
-            provider: { _, _ in Data() }
-        )
-
         for case let fileURL as URL in enumerator {
+            let values = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
             let relativePath = String(fileURL.path.dropFirst(basePath.count + 1))
-            var isDirectory: ObjCBool = false
-            fm.fileExists(atPath: fileURL.path, isDirectory: &isDirectory)
-
-            if isDirectory.boolValue {
-                try archive.addEntry(
-                    with: relativePath + "/",
-                    type: .directory,
-                    uncompressedSize: Int64(0),
-                    provider: { _, _ in Data() }
-                )
-            } else {
-                try archive.addEntry(
-                    with: relativePath,
-                    fileURL: fileURL,
-                    compressionMethod: .deflate
-                )
-            }
+            try archive.addEntry(
+                with: relativePath,
+                fileURL: fileURL,
+                compressionMethod: .deflate
+            )
         }
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-final class RarHandler: ArchiveHandler {
+final class RarHandler: ArchiveHandler, @unchecked Sendable {
     let format: ArchiveFormat = .rar
     let url: URL
 

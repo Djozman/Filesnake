@@ -1,7 +1,7 @@
 import Foundation
 import SWCompression
 
-final class GzipHandler: ArchiveHandler {
+final class GzipHandler: ArchiveHandler, @unchecked Sendable {
     let format: ArchiveFormat = .gz
     let url: URL
 

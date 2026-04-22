@@ -1,7 +1,7 @@
 import Foundation
 import SWCompression
 
-final class TarHandler: ArchiveHandler {
+final class TarHandler: ArchiveHandler, @unchecked Sendable {
     var format: ArchiveFormat { gzipped ? .tarGz : .tar }
     let url: URL
     private let gzipped: Bool
