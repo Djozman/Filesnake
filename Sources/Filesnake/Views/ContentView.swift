@@ -208,9 +208,8 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             let subs = split.arrangedSubviews
             if sidebarVisible {
                 subs[0].isHidden = false
-                if subs[0].frame.width < Self.sidebarMin {
-                    subs[0].frame.size.width = Self.initialSidebar
-                }
+                let target = c.lastSidebarWidth > 0 ? c.lastSidebarWidth : Self.initialSidebar
+                subs[0].frame.size.width = target
                 split.adjustSubviews()
             } else {
                 subs[0].isHidden = true
@@ -223,11 +222,9 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             c.previewShown = previewVisible
             let subs = split.arrangedSubviews
             if previewVisible {
-                // Unhide first so NSSplitView counts it in layout.
                 subs[2].isHidden = false
-                if subs[2].frame.width < Self.previewMin {
-                    subs[2].frame.size.width = Self.initialPreview
-                }
+                let target = c.lastPreviewWidth > 0 ? c.lastPreviewWidth : Self.initialPreview
+                subs[2].frame.size.width = target
                 split.adjustSubviews()
             } else {
                 subs[2].isHidden = true
@@ -248,6 +245,9 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         /// Mirrors the binding values so we only act on actual changes.
         var sidebarShown = true
         var previewShown = false
+        
+        var lastSidebarWidth: CGFloat = 0
+        var lastPreviewWidth: CGFloat = 0
 
         // Constants duplicated here for delegate use.
         private let sidebarMin: CGFloat = 140
@@ -303,6 +303,15 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
             let subs = splitView.arrangedSubviews
             return subview === subs.first || subview === subs.last
+        }
+
+        func splitViewDidResizeSubviews(_ notification: Notification) {
+            guard let splitView = notification.object as? NSSplitView else { return }
+            let subs = splitView.arrangedSubviews
+            if subs.count == 3 {
+                if !subs[0].isHidden { lastSidebarWidth = subs[0].frame.width }
+                if !subs[2].isHidden { lastPreviewWidth = subs[2].frame.width }
+            }
         }
     }
 }

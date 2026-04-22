@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.backgroundColor = .clear
             panel.isOpaque = false
             panel.hasShadow = true
+            panel.hidesOnDeactivate = false
             
             let hostingView = NSHostingView(rootView: HUDWrapper(document: document))
             panel.contentView = hostingView
@@ -72,8 +73,12 @@ struct FilesnakeApp: App {
                         let isBackground = comps.queryItems?.first(where: { $0.name == "background" })?.value == "1"
                         
                         if isBackground {
+                            NSApp.setActivationPolicy(.accessory)
+                            NSApp.hide(nil)
                             // Close main windows to stay "background"
                             for window in NSApp.windows where !(window is NSPanel) {
+                                window.alphaValue = 0
+                                window.orderOut(nil)
                                 window.close()
                             }
                         }
