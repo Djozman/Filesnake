@@ -213,7 +213,6 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
                 }
             } else {
                 subs[0].isHidden = true
-                split.setPosition(0, ofDividerAt: 0)
             }
         }
 
@@ -235,7 +234,6 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
                 }
             } else {
                 subs[2].isHidden = true
-                split.setPosition(split.bounds.width, ofDividerAt: 1)
             }
         }
     }
@@ -299,6 +297,8 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             var x: CGFloat = 0
             if !leftHidden  { subs[0].frame = NSRect(x: x, y: 0, width: leftW,   height: h); x += leftW + dT }
             subs[1].frame = NSRect(x: x, y: 0, width: centerW, height: h); x += centerW
+            print("Layout -> left: (subs[0].frame), center: (subs[1].frame), right: (subs[2].frame)")
+
             if !rightHidden { x += dT; subs[2].frame = NSRect(x: x, y: 0, width: rightW, height: h) }
         }
 
