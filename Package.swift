@@ -5,7 +5,8 @@ let package = Package(
     name: "Filesnake",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "Filesnake", targets: ["Filesnake"])
+        .executable(name: "Filesnake", targets: ["Filesnake"]),
+        .executable(name: "FilesnakeFinderExtension", targets: ["FilesnakeFinderExtension"])
     ],
     dependencies: [
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.19"),
@@ -19,7 +20,12 @@ let package = Package(
                 .product(name: "SWCompression", package: "SWCompression"),
             ],
             path: "Sources/Filesnake",
-            exclude: ["Resources/Info.plist", "Resources/Filesnake.icns"]
+            exclude: ["Resources"]
+        ),
+        .executableTarget(
+            name: "FilesnakeFinderExtension",
+            path: "Sources/FilesnakeFinderExtension",
+            exclude: ["Resources"]
         )
     ]
 )

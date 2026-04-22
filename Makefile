@@ -67,4 +67,9 @@ _bundle:
 	@cp .build/$(SWIFT_BUILD_CONFIG)/$(APP_NAME) $(MACOS_DIR)/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
 	@if [ -f $(ICON_SRC) ]; then cp $(ICON_SRC) $(RES_DIR)/AppIcon.icns; echo "Icon bundled."; fi
+	@echo "Packaging Finder Sync Extension..."
+	@mkdir -p $(APP_BUNDLE)/Contents/PlugIns/FilesnakeFinderExtension.appex/Contents/MacOS
+	@cp .build/$(SWIFT_BUILD_CONFIG)/FilesnakeFinderExtension $(APP_BUNDLE)/Contents/PlugIns/FilesnakeFinderExtension.appex/Contents/MacOS/FilesnakeFinderExtension
+	@cp Sources/FilesnakeFinderExtension/Resources/Info.plist $(APP_BUNDLE)/Contents/PlugIns/FilesnakeFinderExtension.appex/Contents/Info.plist
+	@codesign -s - -f --entitlements ext.entitlements $(APP_BUNDLE)/Contents/PlugIns/FilesnakeFinderExtension.appex
 	@echo "Bundle ready: $(APP_BUNDLE)"
