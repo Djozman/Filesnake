@@ -7,17 +7,6 @@ struct ContentView: View {
     @State private var sidebarVisible = true
     @State private var previewVisible = false
 
-    // Auto-show preview when a file is focused, hide when nothing is focused
-    var shouldShowPreview: Bool {
-        guard previewVisible else { return false }
-        if let id = document.focused,
-           let entry = document.entries.first(where: { $0.id == id }),
-           !entry.isDirectory {
-            return true
-        }
-        return false
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             InlineTopBar(sidebarVisible: $sidebarVisible, previewVisible: $previewVisible)
@@ -31,10 +20,7 @@ struct ContentView: View {
                 },
                 right: PreviewPane().environmentObject(document),
                 sidebarVisible: $sidebarVisible,
-                previewVisible: Binding(
-                    get: { shouldShowPreview },
-                    set: { previewVisible = $0 }
-                )
+                previewVisible: $previewVisible
             )
             if document.isBusy {
                 StatusBar(text: "Working\u{2026}", busy: true)
@@ -182,6 +168,9 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         let centerHost = NSHostingView(rootView: center)
         let rightHost  = NSHostingView(rootView: right)
 
+        // Hide the right pane BEFORE adding to split so it starts collapsed
+        rightHost.isHidden = true
+
         [leftHost, centerHost, rightHost].forEach {
             $0.autoresizingMask = [.width, .height]
             split.addArrangedSubview($0)
@@ -196,8 +185,6 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             let w = split.bounds.width
             guard w > 0 else { return }
             split.setPosition(Self.initialSidebar, ofDividerAt: 0)
-            // Collapse preview by default
-            split.setPosition(w, ofDividerAt: 1)
         }
         return split
     }
@@ -208,21 +195,30 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         context.coordinator.rightHost?.rootView  = right
 
         let subs = split.arrangedSubviews
-        let leftView      = subs[0]
-        let rightView     = subs[2]
+        let leftView  = subs[0]
+        let rightView = subs[2]
+
         let isLeftCollapsed  = split.isSubviewCollapsed(leftView)
         let isRightCollapsed = split.isSubviewCollapsed(rightView)
 
+        // Sidebar
         if sidebarVisible && isLeftCollapsed {
             split.setPosition(Self.initialSidebar, ofDividerAt: 0)
         } else if !sidebarVisible && !isLeftCollapsed {
             split.setPosition(0, ofDividerAt: 0)
         }
 
+        // Preview — use isHidden to force true collapse before layout runs
         if previewVisible && isRightCollapsed {
+            rightView.isHidden = false
             split.setPosition(split.bounds.width - Self.initialPreview, ofDividerAt: 1)
         } else if !previewVisible && !isRightCollapsed {
-            split.setPosition(split.bounds.width, ofDividerAt: 1)
+            split.setPosition(split.bounds.width + split.dividerThickness, ofDividerAt: 1)
+            DispatchQueue.main.async {
+                if split.isSubviewCollapsed(rightView) == false {
+                    rightView.isHidden = true
+                }
+            }
         }
     }
 
@@ -265,7 +261,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             let dT             = splitView.dividerThickness
             let leftCollapsed  = splitView.isSubviewCollapsed(subs[0])
             let rightCollapsed = splitView.isSubviewCollapsed(subs[2])
-            let leftW: CGFloat = leftCollapsed  ? 0 : max(sidebarMin, min(sidebarMax, subs[0].frame.width))
+            let leftW: CGFloat  = leftCollapsed  ? 0 : max(sidebarMin, min(sidebarMax, subs[0].frame.width))
             let rightW: CGFloat = rightCollapsed ? 0 : max(previewMin, min(previewMax, subs[2].frame.width))
             let numDividers: CGFloat = (leftCollapsed ? 0 : 1) + (rightCollapsed ? 0 : 1)
             let centerW = max(centerMin, total - leftW - rightW - numDividers * dT)
