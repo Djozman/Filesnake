@@ -214,6 +214,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
                 split.adjustSubviews()
             } else {
                 subs[0].isHidden = true
+                split.adjustSubviews()
             }
         }
 
@@ -230,6 +231,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
                 split.adjustSubviews()
             } else {
                 subs[2].isHidden = true
+                split.adjustSubviews()
             }
         }
     }
