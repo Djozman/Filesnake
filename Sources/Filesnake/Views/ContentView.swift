@@ -168,6 +168,7 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         let centerHost = NSHostingView(rootView: center)
         let rightHost  = NSHostingView(rootView: right)
 
+        // Collapse right pane initially
         rightHost.isHidden = true
 
         [leftHost, centerHost, rightHost].forEach {
@@ -200,19 +201,31 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
         let isLeftCollapsed  = split.isSubviewCollapsed(leftView)
         let isRightCollapsed = split.isSubviewCollapsed(rightView)
 
+        // Sidebar
         if sidebarVisible && isLeftCollapsed {
             split.setPosition(Self.initialSidebar, ofDividerAt: 0)
         } else if !sidebarVisible && !isLeftCollapsed {
             split.setPosition(0, ofDividerAt: 0)
         }
 
+        // Preview: unhide first so NSSplitView knows the pane exists,
+        // then defer setPosition so the layout pass has already run.
         if previewVisible && isRightCollapsed {
             rightView.isHidden = false
-            split.setPosition(split.bounds.width - Self.initialPreview, ofDividerAt: 1)
+            DispatchQueue.main.async {
+                let total = split.bounds.width
+                guard total > 0 else { return }
+                let leftW = split.isSubviewCollapsed(subs[0]) ? 0 : subs[0].frame.width
+                let dT    = split.dividerThickness
+                // Guarantee center stays above its minimum.
+                let desiredPos = total - Self.initialPreview - dT
+                let minPos     = leftW + (leftW > 0 ? dT : 0) + Self.centerMin
+                split.setPosition(max(desiredPos, minPos), ofDividerAt: 1)
+            }
         } else if !previewVisible && !isRightCollapsed {
             split.setPosition(split.bounds.width + split.dividerThickness, ofDividerAt: 1)
             DispatchQueue.main.async {
-                if split.isSubviewCollapsed(rightView) == false {
+                if !split.isSubviewCollapsed(rightView) {
                     rightView.isHidden = true
                 }
             }
