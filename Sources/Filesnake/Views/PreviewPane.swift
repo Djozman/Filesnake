@@ -67,17 +67,37 @@ private struct FitQLPreviewView: NSViewRepresentable {
 
     func updateNSView(_ preview: NSView, context: Context) {
         guard let ql = context.coordinator.previewView else { return }
+        // Detached from window → AppKit has moved the preview into
+        // `QLPreviewDeactivatedInternalState`. Setting a non-nil item here
+        // would trip QuickLook's internal assertion and abort the app.
+        // This happens during the save → reopen → re-render cascade,
+        // when SwiftUI fires one last updateNSView on a view whose window
+        // is already tearing down.
+        guard ql.window != nil else { return }
+        // Guard against stale URLs: if the cached file vanished under us
+        // (previewCacheDir got rebuilt on reopen), don't hand QuickLook a
+        // dead path — let the outer branch switch us out on the next tick.
         if (ql.previewItem as? URL) != url {
+            guard FileManager.default.fileExists(atPath: url.path) else { return }
             ql.previewItem = url as QLPreviewItem
             context.coordinator.needsFit = true
         }
         if context.coordinator.needsFit {
             context.coordinator.needsFit = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak ql] in
-                guard let ql else { return }
+                guard let ql, ql.window != nil else { return }
                 Self.fitContent(ql)
             }
         }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        // Proactively drop QuickLook's reference to the URL before AppKit
+        // flips the view into its Deactivated state. If a later updateNSView
+        // slips through (it shouldn't, but SwiftUI runs its own schedule),
+        // a nil item is always safe to set.
+        coordinator.previewView?.previewItem = nil
+        coordinator.previewView = nil
     }
 
     /// Fit-to-pane only for content whose natural height fits within the pane
