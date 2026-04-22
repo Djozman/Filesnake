@@ -508,7 +508,16 @@ final class ArchiveDocument: ObservableObject {
         panel.prompt = "Extract Here"; panel.message = "Choose a destination folder"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let fileEntries = checkedEntries.filter { !$0.isDirectory }
-        extractEntries(fileEntries, to: dest, using: handler)
+        let rebasePrefix = currentFolderPath
+        extractEntries(
+            fileEntries, 
+            to: dest, 
+            using: handler,
+            outputPath: { entry in
+                guard !rebasePrefix.isEmpty, entry.path.hasPrefix(rebasePrefix) else { return entry.path }
+                return String(entry.path.dropFirst(rebasePrefix.count))
+            }
+        )
     }
 
     func extractPaths(_ paths: [String], to dest: URL) {
@@ -534,7 +543,16 @@ final class ArchiveDocument: ObservableObject {
         guard let handler, !checked.isEmpty else { return }
         let fileEntries = checkedEntries.filter { !$0.isDirectory }
         guard !fileEntries.isEmpty else { return }
-        extractEntries(fileEntries, to: dest, using: handler)
+        let rebasePrefix = currentFolderPath
+        extractEntries(
+            fileEntries, 
+            to: dest, 
+            using: handler,
+            outputPath: { entry in
+                guard !rebasePrefix.isEmpty, entry.path.hasPrefix(rebasePrefix) else { return entry.path }
+                return String(entry.path.dropFirst(rebasePrefix.count))
+            }
+        )
     }
 
     func extractAll() {
