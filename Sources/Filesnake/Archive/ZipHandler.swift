@@ -95,71 +95,13 @@ final class ZipHandler: ArchiveHandler, @unchecked Sendable {
         return p
     }
 
-    /// Re-derive sizes via Python's `zipfile` module (first choice — handles
-    /// ZIP64 + UTF-8 correctly, returns JSON so parsing can't slip). If Python
-    /// isn't usable (clean Macs where /usr/bin/python3 is still the CLT stub),
-    /// fall through to `unzip -v`, which ships with every macOS.
+    /// Re-derive sizes via `unzip -v`, which ships with every macOS and handles
+    /// ZIP64 correctly — used when ZIPFoundation returns suspicious sentinel values.
     private func readSizesViaFallback() -> [String: (uncompressed: UInt64, compressed: UInt64)] {
-        if let sizes = readSizesViaPython(), !sizes.isEmpty { return sizes }
         return readSizesViaUnzipV()
     }
 
-    /// Primary fallback: Python's `zipfile.ZipFile.infolist()` emits
-    /// `(file_size, compress_size)` pairs encoded as JSON.
-    private func readSizesViaPython() -> [String: (uncompressed: UInt64, compressed: UInt64)]? {
-        // `/usr/bin/python3` on macOS 12.3+ is a stub that triggers a "Install
-        // Command Line Tools" dialog if CLT isn't present — not what we want
-        // during a silent size refresh. We probe with `--version` first: the
-        // stub prints to stderr and exits non-zero, real Python exits 0.
-        if !probePython3() { return nil }
-
-        let script = """
-        import sys, zipfile, json
-        try:
-            with zipfile.ZipFile(sys.argv[1], 'r') as z:
-                print(json.dumps({i.filename: [i.file_size, i.compress_size] for i in z.infolist()}))
-        except Exception:
-            print("{}")
-        """
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        proc.arguments = ["-c", script, url.path]
-        let outPipe = Pipe()
-        proc.standardOutput = outPipe
-        proc.standardError = FileHandle.nullDevice
-        do { try proc.run() } catch { return nil }
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-        guard proc.terminationStatus == 0 else { return nil }
-
-        guard let jsonObject = try? JSONSerialization.jsonObject(with: data, options: []),
-              let dict = jsonObject as? [String: [UInt64]] else {
-            return nil
-        }
-
-        var sizes: [String: (UInt64, UInt64)] = [:]
-        for (key, values) in dict where values.count == 2 {
-            sizes[ZipHandler.normalizeZipPath(key)] = (values[0], values[1])
-        }
-        return sizes
-    }
-
-    /// Quick, silent probe: does `/usr/bin/python3 --version` actually run
-    /// (returns 0) vs. pop the CLT install dialog? We redirect both streams
-    /// to /dev/null so the user never sees GUI output from the probe.
-    private func probePython3() -> Bool {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        proc.arguments = ["--version"]
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        do { try proc.run() } catch { return false }
-        proc.waitUntilExit()
-        return proc.terminationStatus == 0
-    }
-
-    /// Secondary fallback: parse `unzip -v` output. Columns are fixed-width
+    /// Fallback: parse `unzip -v` output. Columns are fixed-width
     /// in macOS's stock `unzip 6.00`; we parse by splitting on whitespace
     /// and taking the entry name as everything after column 8. `unzip` always
     /// ships with macOS — no install prompt, no extra dependency.

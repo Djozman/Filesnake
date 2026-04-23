@@ -50,6 +50,25 @@ final class TarHandler: ArchiveHandler, @unchecked Sendable {
         return entry.data ?? Data()
     }
 
+    func delete(paths: [String]) throws {
+        let toDelete = Set(paths)
+        let remaining = try loadEntries().filter { !toDelete.contains($0.info.name) }
+        var tarData = TarContainer.create(from: remaining)
+        if gzipped {
+            tarData = try GzipArchive.archive(data: tarData)
+        }
+        // Write to a temp file beside the original, then atomically replace
+        let dir = url.deletingLastPathComponent()
+        let tmp = dir.appendingPathComponent(UUID().uuidString + url.lastPathComponent)
+        do {
+            try tarData.write(to: tmp)
+            try FileManager.default.replaceItem(at: url, withItemAt: tmp, backupItemName: nil, resultingItemURL: nil)
+        } catch {
+            try? FileManager.default.removeItem(at: tmp)
+            throw ArchiveError.extractFailed("Failed to rewrite archive: \(error.localizedDescription)")
+        }
+    }
+
     private func loadEntries() throws -> [TarEntry] {
         let raw = try Data(contentsOf: url)
         let tarData: Data = gzipped ? try GzipArchive.unarchive(archive: raw) : raw
