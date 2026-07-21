@@ -11,15 +11,17 @@ final class GzipHandler: ArchiveHandler, @unchecked Sendable {
 
     func list() throws -> [ArchiveEntry] {
         let raw = try Data(contentsOf: url)
-        let inner = try GzipArchive.multiUnarchive(archive: raw).first
+        guard let inner = try GzipArchive.multiUnarchive(archive: raw).first else {
+            throw ArchiveError.readFailed("The GZIP archive does not contain a data stream.")
+        }
         let name = innerName()
-        let size = UInt64(inner?.data.count ?? 0)
+        let size = UInt64(inner.data.count)
         return [ArchiveEntry(
             path: name,
             isDirectory: false,
             uncompressedSize: size,
             compressedSize: UInt64((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0),
-            modified: inner?.header.modificationTime,
+            modified: inner.header.modificationTime,
             crc32: nil
         )]
     }

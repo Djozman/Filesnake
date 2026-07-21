@@ -38,6 +38,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func observeSaveProgress(for document: ArchiveDocument) {
         showHUD(for: document)
     }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let document, document.isDirty else { return .terminateNow }
+        guard !document.isBusy else { return .terminateCancel }
+
+        let alert = NSAlert()
+        alert.messageText = "Save changes before quitting?"
+        alert.informativeText = "Changes to \"\(document.archiveURL?.lastPathComponent ?? "archive")\" will be lost if you don’t save them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don’t Save")
+        alert.addButton(withTitle: "Cancel")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            document.saveAndThenTerminate()
+            return .terminateLater
+        case .alertSecondButtonReturn:
+            return .terminateNow
+        default:
+            return .terminateCancel
+        }
+    }
 }
 
 struct HUDWrapper: View {
@@ -63,8 +85,9 @@ struct FilesnakeApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(document)
-                .frame(minWidth: 480, minHeight: 320)
+                .frame(minWidth: 760, minHeight: 480)
                 .navigationTitle("")
+                .onAppear { appDelegate.document = document }
                 .onOpenURL { url in
                     if url.scheme == "filesnake" {
                         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
@@ -110,6 +133,14 @@ struct FilesnakeApp: App {
                 .keyboardShortcut("o", modifiers: [.command])
             }
             CommandGroup(after: .newItem) {
+                Button("Save Archive") { document.saveArchive() }
+                    .keyboardShortcut("s", modifiers: [.command])
+                    .disabled(document.archiveURL == nil || !document.isDirty || document.isBusy)
+
+                Button("Extract All…") { document.extractAll() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(document.archiveURL == nil || document.isBusy)
+
                 Divider()
                 Button("Close Archive") { document.close() }
                     .keyboardShortcut("w", modifiers: [.command])

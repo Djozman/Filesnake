@@ -295,8 +295,6 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
             var x: CGFloat = 0
             if !leftHidden  { subs[0].frame = NSRect(x: x, y: 0, width: leftW,   height: h); x += leftW + dT }
             subs[1].frame = NSRect(x: x, y: 0, width: centerW, height: h); x += centerW
-            print("Layout -> left: (subs[0].frame), center: (subs[1].frame), right: (subs[2].frame)")
-
             if !rightHidden { x += dT; subs[2].frame = NSRect(x: x, y: 0, width: rightW, height: h) }
         }
 
@@ -319,33 +317,58 @@ struct ThreePaneSplit<L: View, C: View, R: View>: NSViewRepresentable {
 // MARK: - Inline top bar
 
 struct InlineTopBar: View {
+    @EnvironmentObject var document: ArchiveDocument
     @Binding var sidebarVisible: Bool
     @Binding var previewVisible: Bool
+
     var body: some View {
-        HStack(spacing: 0) {
-            Button { sidebarVisible.toggle() } label: {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 28, height: 22)
-                    .contentShape(Rectangle())
+        HStack(spacing: 10) {
+            chromeButton(icon: "sidebar.left", help: sidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
+                sidebarVisible.toggle()
             }
-            .buttonStyle(.borderless)
-            .help(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-            .padding(.leading, 6)
+
+            if let url = document.archiveURL {
+                FilesnakeLogo(size: 22)
+                Text(url.lastPathComponent)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if document.isDirty {
+                    Circle().fill(Color.orange).frame(width: 6, height: 6)
+                        .help("Unsaved archive changes")
+                }
+            }
+
             Spacer()
-            Button { previewVisible.toggle() } label: {
-                Image(systemName: "sidebar.right")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 28, height: 22)
-                    .contentShape(Rectangle())
+
+            if document.archiveURL != nil {
+                Text(document.format?.displayName ?? "Archive")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 5))
             }
-            .buttonStyle(.borderless)
-            .help(previewVisible ? "Hide Preview" : "Show Preview")
-            .padding(.trailing, 6)
+
+            chromeButton(icon: "sidebar.right", help: previewVisible ? "Hide Preview" : "Show Preview") {
+                previewVisible.toggle()
+            }
         }
-        .frame(height: 28)
+        .padding(.horizontal, 8)
+        .frame(height: 34)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private func chromeButton(icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 28, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(help)
     }
 }
 
@@ -356,8 +379,11 @@ struct FolderBreadcrumbBar: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
-                Button("Root") { document.goToRoot() }
-                    .buttonStyle(.link).disabled(document.currentFolderPath.isEmpty)
+                Button { document.goToRoot() } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .buttonStyle(.link)
+                .disabled(document.currentFolderPath.isEmpty)
                 ForEach(Array(document.breadcrumbs.enumerated()), id: \.offset) { index, crumb in
                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                     Button(crumb) { document.goToBreadcrumb(index: index) }
@@ -381,14 +407,14 @@ struct FolderBreadcrumbBar: View {
 struct DropHighlightOverlay: View {
     var body: some View {
         ZStack {
-            Color.accentColor.opacity(0.08)
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(Color.accentColor, lineWidth: 3).padding(4)
+            FilesnakeTheme.accent.opacity(0.10)
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(FilesnakeTheme.accent, style: StrokeStyle(lineWidth: 3, dash: [9, 7]))
+                .padding(10)
             VStack(spacing: 8) {
-                Image(systemName: "archivebox")
-                    .font(.system(size: 32, weight: .light)).foregroundStyle(Color.accentColor)
-                Text("Release to Open Archive")
-                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(Color.accentColor)
+                FilesnakeLogo(size: 54)
+                Text("Drop to inspect archive")
+                    .font(.system(size: 18, weight: .semibold)).foregroundStyle(FilesnakeTheme.accent)
             }
         }
         .ignoresSafeArea().allowsHitTesting(false)

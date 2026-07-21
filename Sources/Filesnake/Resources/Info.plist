@@ -10,9 +10,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.filesnake.app</string>
     <key>CFBundleVersion</key>
-    <string>7</string>
+    <string>8</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2.4</string>
+    <string>1.2.5</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
@@ -28,7 +28,7 @@
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright &#169; 2024 Filesnake. All rights reserved.</string>
+    <string>Copyright &#169; 2024–2026 Filesnake. All rights reserved.</string>
 
     <!-- URL Scheme for Finder Sync Extension -->
     <key>CFBundleURLTypes</key>
@@ -93,38 +93,6 @@
                 <string>org.gnu.gnu-zip-tar-archive</string>
             </array>
         </dict>
-        <!-- BZ2 / TBZ -->
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>Bzip2 Archive</string>
-            <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
-            <key>LSHandlerRank</key>
-            <string>Default</string>
-            <key>CFBundleTypeIconFile</key>
-            <string>AppIcon</string>
-            <key>LSItemContentTypes</key>
-            <array>
-                <string>public.bzip2-archive</string>
-                <string>org.bzip.bzip2-archive</string>
-            </array>
-        </dict>
-        <!-- XZ / TXZ -->
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>XZ Archive</string>
-            <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
-            <key>LSHandlerRank</key>
-            <string>Default</string>
-            <key>CFBundleTypeIconFile</key>
-            <string>AppIcon</string>
-            <key>LSItemContentTypes</key>
-            <array>
-                <string>org.tukaani.xz-archive</string>
-                <string>org.tukaani.tar-xz-archive</string>
-            </array>
-        </dict>
         <!-- RAR -->
         <dict>
             <key>CFBundleTypeName</key>
@@ -138,21 +106,6 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.rarlab.rar-archive</string>
-            </array>
-        </dict>
-        <!-- 7-Zip -->
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>7-Zip Archive</string>
-            <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
-            <key>LSHandlerRank</key>
-            <string>Default</string>
-            <key>CFBundleTypeIconFile</key>
-            <string>AppIcon</string>
-            <key>LSItemContentTypes</key>
-            <array>
-                <string>org.7-zip.7-zip-archive</string>
             </array>
         </dict>
     </array>

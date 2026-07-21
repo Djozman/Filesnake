@@ -1,4 +1,6 @@
-<h1 align="center">🐍 Filesnake</h1>
+<p align="center"><img src="Assets/FilesnakeLogo.png" width="128" alt="Filesnake logo"></p>
+
+<h1 align="center">Filesnake</h1>
 
 <p align="center">
   <b>The modern, native macOS archive manager.</b><br>
@@ -42,6 +44,16 @@ Most archive tools on macOS either **extract blindly** (The Unarchiver) or **cos
 | **Lightweight** | ✅ ~5 MB | ❌ ~30 MB | ✅ ~15 MB |
 
 ---
+
+## What’s new in 1.2.5
+
+- A redesigned welcome experience with recent archives and clearer drag-and-drop guidance
+- A focused toolbar that groups selection and extraction actions
+- Refined archive chrome, breadcrumbs, dirty-state feedback, and keyboard shortcuts
+- A completely new, simplified Filesnake logo and macOS app icon
+- Safer archive extraction with path-traversal protection
+- Reliable save-before-open, save-before-close, and save-before-quit behavior
+- Robust RAR metadata parsing and large-output process handling
 
 ## Features
 
