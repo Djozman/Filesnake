@@ -4,10 +4,9 @@ import SwiftUI
 enum FilesnakeTheme {
     static let accent = Color(red: 0.15, green: 0.51, blue: 0.87)
     static let accentDeep = Color(red: 0.10, green: 0.40, blue: 0.79)
-    static let tongue = Color(red: 0.94, green: 0.21, blue: 0.26)
 }
 
-/// A restrained wave that becomes a snake through one tiny red tongue.
+/// Filesnake's final mark: one clean white wave on blue.
 struct FilesnakeLogo: View {
     var size: CGFloat = 64
 
@@ -27,16 +26,6 @@ struct FilesnakeLogo: View {
                     .white,
                     style: StrokeStyle(
                         lineWidth: size * 0.085,
-                        lineCap: .round,
-                        lineJoin: .round
-                    )
-                )
-
-            WaveTongueMark()
-                .stroke(
-                    FilesnakeTheme.tongue,
-                    style: StrokeStyle(
-                        lineWidth: max(1.0, size * 0.018),
                         lineCap: .round,
                         lineJoin: .round
                     )
@@ -61,21 +50,6 @@ private struct SnakeWaveMark: Shape {
             control1: CGPoint(x: rect.width * 0.59, y: rect.height * 0.69),
             control2: CGPoint(x: rect.width * 0.70, y: rect.height * 0.68)
         )
-        return path
-    }
-}
-
-private struct WaveTongueMark: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let root = CGPoint(x: rect.width * 0.805, y: rect.height * 0.45)
-        let fork = CGPoint(x: rect.width * 0.85, y: rect.height * 0.45)
-        path.move(to: root)
-        path.addLine(to: fork)
-        path.move(to: fork)
-        path.addLine(to: CGPoint(x: rect.width * 0.895, y: rect.height * 0.42))
-        path.move(to: fork)
-        path.addLine(to: CGPoint(x: rect.width * 0.895, y: rect.height * 0.48))
         return path
     }
 }

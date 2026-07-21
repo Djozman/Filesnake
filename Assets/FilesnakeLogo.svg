@@ -1,7 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
-<title id="title">Filesnake</title><desc id="desc">A clean white wave with one tiny red forked tongue on blue.</desc>
+<title id="title">Filesnake</title><desc id="desc">A single clean white wave on a blue app icon.</desc>
 <defs><linearGradient id="blue" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#3097EF"/><stop offset="1" stop-color="#1965CA"/></linearGradient></defs>
 <rect x="48" y="48" width="928" height="928" rx="222" fill="url(#blue)"/>
 <path d="M180 580 C310 345 420 345 505 500 C595 690 705 680 790 450" fill="none" stroke="#fff" stroke-width="86" stroke-linecap="round" stroke-linejoin="round"/>
-<path d="M805 450 H850 M850 450 L895 420 M850 450 L895 480" fill="none" stroke="#F03642" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
